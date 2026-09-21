@@ -1,0 +1,120 @@
+tpt-des Design Specification (spec.txt)
+1. Overview
+Name: tpt-des
+Description: A pure-Rust, AI-native Discrete Event Simulation (DES) and stochastic systems library. It provides event scheduling, queuing theory, Petri nets, Markov chains, resource contention modeling, and process-oriented simulation without C/C++ FFI or external solver dependencies.
+License: MIT (all dependencies must be MIT or compatible; no Apache-2.0-only crates).
+Core Philosophy: Unit-safe, no_std + alloc compatible at the core, differentiable for gradient-based system optimization, and mathematically rigorous via native Rust verification tooling and from-scratch implementations.
+2. Design Principles
+Zero External Solver Dependencies: No SimPy FFI, no Arena, no AnyLogic bindings. All event calendars, priority queues, stochastic samplers, and matrix exponentials (for Markov chains) are implemented from scratch in pure Rust, leveraging tpt-math and tpt-systems-optimisation.
+Strict Licensing: No Apache-2.0-only dependencies. The workspace strictly uses MIT, MIT/Apache-2.0 dual, or custom in-house crates.
+Type-State & Temporal Safety: Compile-time prevention of time-unit mismatches. Phantom types distinguish between simulation time (ticks), real-world time (seconds), and lead times (hours). Event priorities and resource capacities are enforced via const generics.
+Native Formal Verification: Safety and stochastic invariants enforced via:
+Kani Rust Verifier: For bounded model checking of critical event loops (e.g., proving the event calendar maintains heap ordering, or that resource contention never leads to deadlock in acyclic dependency graphs).
+Property-Based Testing (proptest): For statistical verification of stochastic laws (e.g., "M/M/1 queue steady-state matches Erlang's formula", "Markov chain transition matrices are row-stochastic", "conservation of entities in closed queuing networks").
+3. Workspace Layout
+
+tpt-des/
+├── Cargo.toml                 # Workspace manifest (strict dependency linting)
+├── crates/
+│   ├── tpt-des-core/          # Foundation: Simulation clock, event calendar, entity traits, unit-safe time
+│   ├── tpt-des-queue/         # Queuing theory: M/M/1, M/M/c, M/G/1, network of queues, Erlang formulas
+│   ├── tpt-des-resource/      # Resource modeling: Stores, buffers, servers, preemption, deadlock detection
+│   ├── tpt-des-process/       # Process-oriented simulation: coroutines, generators, blocking/suspension
+│   ├── tpt-des-petri/         # Petri nets: Place/transition nets, stochastic Petri nets, reachability graphs
+│   ├── tpt-des-markov/        # Markov chains: DTMC/CTMC, transition matrices, steady-state, absorption
+│   ├── tpt-des-stats/         # Statistics collection: Warm-up detection, batch means, confidence intervals
+│   ├── tpt-des-verify/        # Verification harnesses: Kani proofs, proptest strategies, conservation checks
+│   └── tpt-des/               # Feature-gated umbrella crate re-exporting all above
+├── spec.txt                   # This document
+└── todo.md                    # Phased build tracking
+
+4. Crate Specifications
+tpt-des-core
+Purpose: The foundational layer. Defines the simulation engine, event calendar, and entity lifecycle.
+Dependencies: tpt-math (internal, MIT).
+Key Features:
+Unit-safe simulation clock with phantom-typed time units (ticks, seconds, hours).
+From-scratch binary heap-based event calendar with 
+O
+(
+log
+⁡
+n
+)
+O(logn) scheduling and cancellation.
+Entity trait with lifecycle hooks (on_create, on_event, on_terminate).
+Deterministic replay via seeded RNG for reproducible simulations.
+no_std + alloc compatible.
+tpt-des-queue
+Purpose: Analytical and simulation-based queuing theory.
+Key Features:
+Closed-form solutions for M/M/1, M/M/c, M/G/1 (Pollaczek-Khinchine), and Erlang B/C loss formulas.
+Network of queues: Jackson networks, open/closed queuing networks with routing matrices.
+Discrete-event simulation of queues with arbitrary inter-arrival and service distributions.
+FIFO, LIFO, priority, and processor-sharing disciplines.
+tpt-des-resource
+Purpose: Modeling of shared resources, buffers, and contention.
+Key Features:
+Resource pools with capacity constraints and preemption policies.
+Stores (discrete containers) and buffers (continuous fluid models).
+Deadlock detection via resource allocation graph cycle detection.
+Seize-delay-release patterns with timeout and cancellation support.
+tpt-des-process
+Purpose: Process-oriented (coroutine-based) simulation modeling.
+Key Features:
+Generator-based process definitions using Rust's async/await or custom yield primitives.
+Blocking operations: wait_for(resource), delay(duration), wait_until(condition).
+Process interruption, preemption, and resumption.
+Integration with tpt-control for hybrid discrete-continuous simulation.
+tpt-des-petri
+Purpose: Graphical and mathematical modeling of concurrent systems.
+Key Features:
+Place/transition Petri nets with marking representation.
+Stochastic Petri nets (SPN) with exponentially distributed firing times.
+Reachability graph generation and invariant analysis (P-invariants, T-invariants).
+Conversion to continuous-time Markov chains for steady-state analysis.
+tpt-des-markov
+Purpose: Discrete and continuous-time Markov chain analysis.
+Key Features:
+Transition matrix construction and validation (row-stochastic enforcement).
+Steady-state probability computation via power iteration or eigendecomposition (using tpt-math).
+Absorbing Markov chains: expected time to absorption, absorption probabilities.
+First-passage time and mean recurrence time calculations.
+tpt-des-stats
+Purpose: Rigorous statistical analysis of simulation outputs.
+Key Features:
+Warm-up period detection (e.g., Welch's method, MSIR).
+Output analysis: batch means, replication/deletion, and regenerative methods.
+Confidence interval computation for means, quantiles, and proportions.
+Time-series analysis of queue lengths and resource utilization.
+tpt-des-verify
+Purpose: Mathematical verification of simulation algorithms and stochastic invariants.
+Key Features:
+proptest strategies for generating valid queuing networks, Petri net topologies, and transition matrices.
+Kani harnesses to prove event calendar heap invariants and absence of deadlock in acyclic resource graphs.
+Invariant checks: Verify entity conservation in closed networks, and that Markov chains maintain probability mass (rows sum to 1.0).
+5. Integration & Synergies
+tpt-systems-optimisation: tpt-des provides the simulation environment; tpt-systems-optimisation performs gradient-based or evolutionary optimization of system parameters (e.g., optimal number of servers, buffer sizes, routing policies).
+tpt-swarm: tpt-des models task scheduling, communication delays, and resource contention in multi-agent systems. tpt-swarm provides the agent behaviors.
+tpt-robotics: Hybrid simulation combining discrete event logic (task sequencing, battery swaps) with continuous dynamics (tpt-multibody-dynamics) for factory floor digital twins.
+tpt-control: Enables hybrid discrete-continuous simulation where discrete events (e.g., "machine failure") trigger continuous state changes (e.g., "production line slows down").
+AI-Native Agents: Differentiable simulation hooks allow tpt-eve / tpt-anima agents to perform gradient-based policy optimization (e.g., learning optimal dispatch rules via reinforcement learning against the DES environment).
+6. Phased Rollout (todo.md Alignment)
+Phase 0: Foundation & Event Engine (Weeks 1-3)
+Scaffold workspace with strict dependency linting.
+Implement tpt-des-core (simulation clock, event calendar, entity traits).
+Build basic event-driven simulation loop with deterministic replay.
+Verify event calendar heap invariants via Kani.
+Phase 1: Queuing & Resources (Weeks 4-6)
+Implement tpt-des-queue (M/M/1, M/M/c analytical + simulation).
+Build tpt-des-resource (resource pools, stores, deadlock detection).
+Integration test: M/M/1 simulation matches Erlang analytical formulas via proptest.
+Phase 2: Process-Oriented & Advanced Models (Weeks 7-9)
+Build tpt-des-process (coroutine-based process modeling).
+Implement tpt-des-petri (Petri nets, reachability analysis).
+Build tpt-des-markov (DTMC/CTMC, steady-state solvers).
+Write Kani proofs for entity conservation and Markov chain probability mass.
+Phase 3: Statistics & Optimization (Weeks 10-12)
+Implement tpt-des-stats (warm-up detection, batch means, confidence intervals).
+Integrate with tpt-systems-optimisation for parameter optimization.
+End-to-end test: Optimize server count in a multi-class queuing network.
