@@ -1,0 +1,64 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tpt-des-core",
+    "crates/tpt-des-queue",
+    "crates/tpt-des-resource",
+    "crates/tpt-des-process",
+    "crates/tpt-des-petri",
+    "crates/tpt-des-markov",
+    "crates/tpt-des-stats",
+    "crates/tpt-des-verify",
+    "crates/tpt-des",
+]
+
+[workspace.package]
+description = "tpt-des — a pure-Rust, AI-native discrete event simulation and stochastic systems library"
+version = "0.1.0"
+authors = ["TPT Solutions"]
+edition = "2021"
+rust-version = "1.84"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/tpt-solutions/tpt-des"
+repository = "https://github.com/tpt-solutions/tpt-des"
+
+[workspace.dependencies]
+# Internal crates.
+tpt-des-core = { version = "0.1.0", path = "crates/tpt-des-core", default-features = false }
+tpt-des-queue = { version = "0.1.0", path = "crates/tpt-des-queue", default-features = false }
+tpt-des-resource = { version = "0.1.0", path = "crates/tpt-des-resource", default-features = false }
+tpt-des-process = { version = "0.1.0", path = "crates/tpt-des-process" }
+tpt-des-petri = { version = "0.1.0", path = "crates/tpt-des-petri", default-features = false }
+tpt-des-markov = { version = "0.1.0", path = "crates/tpt-des-markov", default-features = false }
+# std-only in practice: the numerics use ln/exp/sqrt (libm), not core intrinsics.
+tpt-des-stats = { version = "0.1.0", path = "crates/tpt-des-stats" }
+tpt-des-verify = { version = "0.1.0", path = "crates/tpt-des-verify" }
+tpt-des = { version = "0.1.0", path = "crates/tpt-des" }
+
+# tpt-math substrate (published on crates.io, matching the sibling-repo
+# convention used by tpt-systems-optimisation). All are MIT OR Apache-2.0.
+tpt-math-prob-core = { version = "0.1.0", default-features = false }
+tpt-math-prob-dist = { version = "0.1.0", default-features = false }
+tpt-math-prob-sampler = { version = "0.1.0", default-features = false }
+tpt-math-prob-markov = { version = "0.1.0", default-features = false }
+tpt-math-linalg-dense = { version = "0.1.0", default-features = false }
+
+# Dev / verification tooling.
+proptest = "1.5"
+criterion = "0.5"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unsafe_code = "forbid"
+# `cfg(kani)` is injected by the Kani verifier, not by Cargo.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[workspace.lints.clippy]
+all = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+overflow-checks = true

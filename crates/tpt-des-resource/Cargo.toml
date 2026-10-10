@@ -1,0 +1,29 @@
+[package]
+name = "tpt-des-resource"
+description = "Resource modeling for tpt-des: capacity-constrained pools, stores, fluid buffers, seize-delay-release with preemption and timeouts, and deadlock detection"
+readme = "README.md"
+keywords = ["simulation", "resources", "deadlock", "discrete-event"]
+categories = ["simulation", "algorithms"]
+
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+tpt-des-core = { workspace = true }
+
+[dev-dependencies]
+tpt-des-verify = { workspace = true }
+proptest = { workspace = true }
+
+[features]
+default = ["std"]
+std = ["alloc", "tpt-des-core/std"]
+alloc = ["tpt-des-core/alloc"]
+
+[lints]
+workspace = true

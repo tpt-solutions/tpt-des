@@ -1,0 +1,34 @@
+[package]
+name = "tpt-des-queue"
+description = "Queuing theory for tpt-des: M/M/1, M/M/c, M/G/1, Erlang B/C, Jackson networks, and DES queues with FIFO/LIFO/priority/processor-sharing disciplines"
+readme = "README.md"
+keywords = ["queueing-theory", "simulation", "erlang", "jackson-network"]
+categories = ["simulation", "mathematics", "algorithms"]
+
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+tpt-des-core = { workspace = true }
+tpt-math-prob-core = { workspace = true }
+tpt-math-prob-dist = { workspace = true }
+tpt-math-prob-sampler = { workspace = true }
+tpt-math-linalg-dense = { workspace = true }
+
+[dev-dependencies]
+tpt-des-verify = { workspace = true }
+tpt-des-stats = { workspace = true, default-features = true }
+proptest = { workspace = true }
+
+[features]
+default = ["std"]
+std = ["alloc", "tpt-des-core/std", "tpt-math-prob-core/std", "tpt-math-prob-dist/std", "tpt-math-prob-sampler/std", "tpt-math-linalg-dense/std"]
+alloc = ["tpt-des-core/alloc", "tpt-math-prob-core/alloc", "tpt-math-prob-dist/alloc", "tpt-math-prob-sampler/alloc", "tpt-math-linalg-dense/alloc"]
+
+[lints]
+workspace = true

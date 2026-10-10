@@ -1,0 +1,28 @@
+[package]
+name = "tpt-des-stats"
+description = "Simulation output analysis for tpt-des: warm-up detection (Welch, MSER), batch means, replication/deletion, regenerative methods, confidence intervals, time series"
+readme = "README.md"
+keywords = ["statistics", "simulation", "confidence-interval", "output-analysis"]
+categories = ["mathematics", "science", "algorithms"]
+
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+tpt-des-core = { workspace = true }
+proptest = { workspace = true }
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
+[lints]
+workspace = true

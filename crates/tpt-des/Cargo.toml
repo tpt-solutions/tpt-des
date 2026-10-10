@@ -1,0 +1,42 @@
+[package]
+name = "tpt-des"
+description = "Pure-Rust, AI-native discrete event simulation and stochastic systems library: event scheduling, queuing theory, Petri nets, Markov chains, resources, process-oriented simulation, statistics, verification"
+readme = "README.md"
+keywords = ["simulation", "discrete-event", "queueing", "petri-net", "markov"]
+categories = ["simulation", "mathematics", "science", "algorithms"]
+
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+tpt-des-core = { workspace = true, optional = true }
+tpt-des-queue = { workspace = true, optional = true }
+tpt-des-resource = { workspace = true, optional = true }
+tpt-des-process = { workspace = true, optional = true }
+tpt-des-petri = { workspace = true, optional = true }
+tpt-des-markov = { workspace = true, optional = true }
+tpt-des-stats = { workspace = true, optional = true }
+tpt-des-verify = { workspace = true, optional = true }
+
+[features]
+default = ["std", "core", "queue", "resource", "process", "petri", "markov", "stats"]
+# std enables the std feature of every included member (the numerics need
+# ln/exp; only tpt-des-core is genuinely no_std-capable).
+std = ["tpt-des-core/std", "tpt-des-queue/std", "tpt-des-resource/std", "tpt-des-petri/std", "tpt-des-markov/std", "tpt-des-stats/std"]
+core = ["dep:tpt-des-core"]
+queue = ["dep:tpt-des-queue", "core"]
+resource = ["dep:tpt-des-resource", "core"]
+process = ["dep:tpt-des-process", "core"]
+petri = ["dep:tpt-des-petri", "core", "markov"]
+markov = ["dep:tpt-des-markov"]
+stats = ["dep:tpt-des-stats"]
+verify = ["dep:tpt-des-verify", "core", "queue", "resource", "petri", "markov", "stats", "std"]
+# no_std subset: default-features = false, features = ["core"].
+
+[lints]
+workspace = true

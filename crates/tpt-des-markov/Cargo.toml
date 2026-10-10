@@ -1,0 +1,33 @@
+[package]
+name = "tpt-des-markov"
+description = "Markov chain analysis for tpt-des: DTMC/CTMC validation, steady-state solvers, matrix exponential, absorbing chains, first-passage times"
+readme = "README.md"
+keywords = ["markov-chain", "ctmc", "steady-state", "simulation"]
+categories = ["mathematics", "science", "algorithms"]
+
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+tpt-math-prob-markov = { workspace = true }
+tpt-math-linalg-dense = { workspace = true }
+
+[features]
+default = ["std"]
+std = ["alloc", "tpt-math-linalg-dense/std"]
+alloc = ["tpt-math-linalg-dense/alloc"]
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "expm_bench"
+harness = false
+
+[lints]
+workspace = true

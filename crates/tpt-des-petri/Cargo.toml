@@ -1,0 +1,29 @@
+[package]
+name = "tpt-des-petri"
+description = "Petri nets for tpt-des: place/transition nets, stochastic Petri nets (Gillespie), reachability graphs, invariant analysis, and CTMC conversion"
+readme = "README.md"
+keywords = ["petri-net", "simulation", "concurrency", "gillespie"]
+categories = ["simulation", "mathematics", "algorithms"]
+
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+tpt-des-core = { workspace = true }
+tpt-des-markov = { workspace = true }
+tpt-math-prob-core = { workspace = true }
+tpt-math-prob-dist = { workspace = true }
+tpt-math-prob-sampler = { workspace = true }
+
+[features]
+default = ["std"]
+std = ["alloc", "tpt-des-core/std", "tpt-des-markov/std", "tpt-math-prob-core/std", "tpt-math-prob-dist/std", "tpt-math-prob-sampler/std"]
+alloc = ["tpt-des-core/alloc", "tpt-des-markov/alloc", "tpt-math-prob-core/alloc", "tpt-math-prob-dist/alloc", "tpt-math-prob-sampler/alloc"]
+
+[lints]
+workspace = true

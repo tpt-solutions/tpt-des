@@ -1,0 +1,21 @@
+[package]
+name = "tpt-des-verify"
+description = "Verification harnesses for tpt-des: proptest strategies, property tests, and Kani bounded model checks"
+readme = "README.md"
+keywords = ["verification", "property-testing", "model-checking", "simulation"]
+categories = ["development-tools::testing", "simulation"]
+
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+tpt-des-core = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "tpt-des-process"
+description = "Process-oriented simulation for tpt-des: async/await coroutines with delay, resource waits, condition waits, interruption, and a hybrid discrete-continuous hook"
+readme = "README.md"
+keywords = ["simulation", "async", "process-oriented", "coroutine"]
+categories = ["simulation", "asynchronous", "concurrency"]
+
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+tpt-des-core = { workspace = true, default-features = true }
+tpt-math-prob-core = { workspace = true }
+
+# This crate is std-only: process wakers use `std::task::Wake`, and the
+# workspace forbids unsafe code (no RawWaker fallback).
+
+[features]
+default = ["std"]
+std = ["tpt-des-core/std", "tpt-math-prob-core/std"]
+
+[lints]
+workspace = true

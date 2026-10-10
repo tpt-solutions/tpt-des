@@ -1,0 +1,34 @@
+[package]
+name = "tpt-des-core"
+description = "Foundation for tpt-des: unit-safe simulation clock, event calendar, entity traits, deterministic replay"
+readme = "README.md"
+keywords = ["simulation", "discrete-event", "queueing", "no-std"]
+categories = ["simulation", "algorithms", "no-std"]
+
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+tpt-math-prob-core = { workspace = true }
+
+[features]
+default = ["std"]
+# `std` pulls in the allocator and floating-point formatting.
+std = ["alloc", "tpt-math-prob-core/std"]
+# Dynamic dispatch, maps and the event heap always need an allocator.
+alloc = ["tpt-math-prob-core/alloc"]
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "calendar_bench"
+harness = false
+
+[lints]
+workspace = true
