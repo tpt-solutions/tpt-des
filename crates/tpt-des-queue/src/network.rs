@@ -142,6 +142,7 @@ pub struct ClosedNetwork {
 /// MVA results for a closed network at population `N`.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct MvaResult {
     /// System throughput `X(N)`.
     pub throughput: f64,

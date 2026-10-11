@@ -29,3 +29,7 @@ pub mod store;
 
 pub use error::ResourceError;
 pub use sdr::{PreemptPolicy, RequestId, ResourceController, SeizeOutcome, SeizeRequest};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_doctests {}

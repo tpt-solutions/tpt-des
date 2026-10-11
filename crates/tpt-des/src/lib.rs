@@ -25,6 +25,7 @@
 //! ```
 //! # #[cfg(all(feature = "queue", feature = "std"))]
 //! # fn main() {
+//! use tpt_des::kernel::Time;
 //! use tpt_des::queue::{run_queue, mm1, Discipline, Exponential, QueueConfig};
 //!
 //! let (lambda, mu) = (0.5, 1.0);
@@ -36,12 +37,12 @@
 //!         capacity: None,
 //!         priority: None,
 //!     },
-//!     20_000.0,
-//!     2_000.0,
+//!     Time::from_raw(20_000.0),
+//!     Time::from_raw(2_000.0),
 //!     42,
 //! );
 //! let exact = mm1(lambda, mu).unwrap();
-//! assert!((metrics.mean_sojourn() - exact.w).abs() / exact.w < 0.25);
+//! assert!((metrics.mean_sojourn().raw() - exact.w).abs() / exact.w < 0.25);
 //! # }
 //! # #[cfg(not(all(feature = "queue", feature = "std")))]
 //! # fn main() {}
@@ -81,3 +82,7 @@ pub use tpt_des_resource as resource;
 pub use tpt_des_stats as stats;
 #[cfg(feature = "verify")]
 pub use tpt_des_verify as verify;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_doctests {}

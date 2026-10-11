@@ -2,6 +2,7 @@
 //! net. The exact steady state comes from the equivalent CTMC; the
 //! simulated occupancy should agree with it. Edit the rates to explore.
 
+use tpt_des::kernel::Time;
 use tpt_des::petri::{Marking, PetriNet, StochasticPetriNet};
 
 const FAIL_RATE: f64 = 0.1;
@@ -29,8 +30,8 @@ fn main() {
         println!("exact steady state  {marking}: {p:.4}");
     }
 
-    let run = spn.simulate(&initial, 100_000.0, 11).expect("valid horizon");
+    let run = spn.simulate(&initial, Time::from_raw(100_000.0), 11).expect("valid horizon");
     for (marking, time) in &run.occupancy {
-        println!("simulated occupancy {marking}: {:.4}", time / run.horizon);
+        println!("simulated occupancy {marking}: {:.4}", time.raw() / run.horizon.raw());
     }
 }

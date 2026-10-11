@@ -26,3 +26,7 @@ pub mod spn;
 pub use net::{Marking, PetriNet};
 pub use reach::{reachability, ReachabilityError, ReachabilityGraph};
 pub use spn::StochasticPetriNet;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_doctests {}

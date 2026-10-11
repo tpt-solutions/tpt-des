@@ -88,3 +88,7 @@ pub use entity::{Ctx, Entity, EntityId};
 pub use rng::SimRng;
 pub use sim::{RunStats, Simulation};
 pub use time::{Hours, Seconds, Ticks, Time};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_doctests {}

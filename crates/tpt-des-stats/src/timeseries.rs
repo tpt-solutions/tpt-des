@@ -7,6 +7,7 @@
 //!   check.
 
 use crate::error::StatsError;
+use tpt_des_core::{Seconds, Time};
 
 /// One-pass running statistics (Welford's algorithm).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -60,8 +61,8 @@ impl RunningStats {
 /// each change; the average integrates the value over `[first_t, last_t]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TimeWeightedAvg {
-    first_t: f64,
-    last_t: f64,
+    first_t: Time<Seconds>,
+    last_t: Time<Seconds>,
     last_v: f64,
     area: f64,
     started: bool,
@@ -77,11 +78,12 @@ impl TimeWeightedAvg {
     ///
     /// # Errors
     ///
-    /// [`StatsError::NonFinite`] for a NaN/infinite time or value, and
+    /// [`StatsError::NonFinite`] for a NaN or infinite value (a non-finite
+    /// time cannot be built as a `Time`, so it panics at construction), and
     /// [`StatsError::OutOfOrder`] if `t` precedes the last recorded time. A
     /// rejected push leaves the accumulator unchanged.
-    pub fn push(&mut self, t: f64, v: f64) -> Result<(), StatsError> {
-        if !t.is_finite() || !v.is_finite() {
+    pub fn push(&mut self, t: Time<Seconds>, v: f64) -> Result<(), StatsError> {
+        if !v.is_finite() {
             return Err(StatsError::NonFinite);
         }
         if self.started && t < self.last_t {
@@ -90,7 +92,7 @@ impl TimeWeightedAvg {
         if !self.started {
             self.first_t = t;
         } else {
-            self.area += self.last_v * (t - self.last_t);
+            self.area += self.last_v * (t - self.last_t).raw();
         }
         self.last_t = t;
         self.last_v = v;
@@ -104,7 +106,7 @@ impl TimeWeightedAvg {
         if !self.started {
             return 0.0;
         }
-        let span = self.window();
+        let span = self.window().raw();
         if span <= 0.0 {
             0.0
         } else {
@@ -113,11 +115,11 @@ impl TimeWeightedAvg {
     }
 
     /// Length of the observed window, from the first push to the last.
-    pub fn window(&self) -> f64 {
+    pub fn window(&self) -> Time<Seconds> {
         if self.started {
             self.last_t - self.first_t
         } else {
-            0.0
+            Time::ZERO
         }
     }
 
@@ -171,14 +173,14 @@ mod tests {
     fn time_weighted_average_is_exact() {
         let mut twa = TimeWeightedAvg::new();
         // Queue length: 0 from t=0, 2 from t=1, 5 from t=3, 0 from t=8.
-        twa.push(0.0, 0.0).unwrap();
-        twa.push(1.0, 2.0).unwrap();
-        twa.push(3.0, 5.0).unwrap();
-        twa.push(8.0, 0.0).unwrap();
+        twa.push(Time::from_raw(0.0), 0.0).unwrap();
+        twa.push(Time::from_raw(1.0), 2.0).unwrap();
+        twa.push(Time::from_raw(3.0), 5.0).unwrap();
+        twa.push(Time::from_raw(8.0), 0.0).unwrap();
         // Integral: 2·2 + 5·5 = 29 over [0, 8].
         assert!(close(twa.integral(), 29.0, 1e-12));
         assert!(close(twa.average(), 29.0 / 8.0, 1e-12));
-        assert!(close(twa.window(), 8.0, 1e-12));
+        assert!(close(twa.window().raw(), 8.0, 1e-12));
     }
 
     #[test]

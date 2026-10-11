@@ -10,12 +10,12 @@
 //! let mut sys = ProcessSystem::new(42);
 //! sys.spawn(|sim| async move {
 //!     for _ in 0..3 {
-//!         sim.delay(2.0).await?;
+//!         sim.delay(tpt_des_core::Time::from_raw(2.0)).await?;
 //!     }
 //!     Ok(())
 //! });
 //! sys.run();
-//! assert_eq!(sys.now(), 6.0);
+//! assert_eq!(sys.now().raw(), 6.0);
 //! ```
 //!
 //! # Blocking operations
@@ -56,3 +56,7 @@ pub mod system;
 
 pub use ops::{Acquire, Delay, Interrupt, WaitUntil};
 pub use system::{ProcessId, ProcessOutput, ProcessSystem, Sim};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_doctests {}

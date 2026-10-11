@@ -2,6 +2,7 @@
 //! reachability analysis, invariant conservation, and exact steady state
 //! via CTMC conversion.
 
+use tpt_des::kernel::Time;
 use tpt_des::petri::{reachability, Marking, PetriNet, StochasticPetriNet};
 
 fn main() {
@@ -49,7 +50,7 @@ fn main() {
     }
 
     // Gillespie simulation occupancy should approach the exact values.
-    let run = spn.simulate(&m0, 100_000.0, 7).unwrap();
+    let run = spn.simulate(&m0, Time::from_raw(100_000.0), 7).unwrap();
     println!("\nsimulated occupancy over {:.0} time units:", run.horizon);
     for k in 0..states.len() {
         let marking = Marking(vec![k as u32, (2 - k as u32)]);

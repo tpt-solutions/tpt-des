@@ -14,9 +14,9 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+tpt-des-core = { workspace = true }
 
 [dev-dependencies]
-tpt-des-core = { workspace = true }
 proptest = { workspace = true }
 
 [features]

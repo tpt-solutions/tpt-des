@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use tpt_des::kernel::Time;
 use tpt_des::process::{ProcessSystem, Sim};
 
 const SERVERS: u64 = 0;
@@ -24,13 +25,13 @@ fn main() {
     let waits_for_arrivals = waits.clone();
     system.spawn(move |sim: Sim| async move {
         for _ in 0..CUSTOMERS {
-            sim.delay(exponential(&sim, ARRIVAL_RATE)).await?;
+            sim.delay(Time::from_raw(exponential(&sim, ARRIVAL_RATE))).await?;
             let waits = waits_for_arrivals.clone();
             sim.spawn(move |sim: Sim| async move {
                 let arrived = sim.now();
                 sim.acquire(SERVERS, 1).await?;
-                waits.borrow_mut().push(sim.now() - arrived);
-                sim.delay(exponential(&sim, SERVICE_RATE)).await?;
+                waits.borrow_mut().push((sim.now() - arrived).raw());
+                sim.delay(Time::from_raw(exponential(&sim, SERVICE_RATE))).await?;
                 sim.release(SERVERS, 1);
                 Ok(())
             });

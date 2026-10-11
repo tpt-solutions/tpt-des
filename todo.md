@@ -221,9 +221,27 @@ Every Phase 6 fix lands with a failing-first regression test (release mode where
   - **Partial:** `planning::validate_mmc` covers M/M/c, with `assert_passes` for tests. It reports standard errors, not confidence intervals, and the Jackson network is not covered.
 - [~] Run-until-precision driver: automatic MSER warm-up + replications until CI half-width < target
   - **Partial:** `planning::mean_wait_to_precision` adds replications until the Student-t half-width of the mean wait meets the target. The warm-up is the caller's; MSER detection is not wired in.
-- [~] Deterministic replay + trace export (event log, seed fingerprint → JSON/CSV/Chrome-trace); rayon-parallel replications behind `std`
-  - **Partial:** `run_queue_traced` and `trace_to_csv` export one row per completed job. Not done: JSON and Chrome-trace output, a seed fingerprint, and rayon parallelism. Rayon is a new runtime dependency, so it needs a sign-off first.
-- [ ] Typed time end-to-end: `Time<Unit>` in queue/process/petri/SPN APIs instead of raw `f64`
-  - **Deferred:** this is a breaking change across four crates, and the metrics' units need a decision first. It should be its own change.
-- [~] Optional `serde` for configs/results; WASM playground; `tpt-des` CLI running a TOML-described queue network
-  - **Partial:** `serde` is done for result types in `tpt-des-queue` (configs hold boxed samplers and are not serializable). WASM playground and the TOML CLI are **deferred**. Both need a new crate and new dependencies, which need a decision first.
+- [x] Deterministic replay + trace export (event log, seed fingerprint → JSON/CSV/Chrome-trace); rayon-parallel replications behind `std`
+  - **Done (pre-release batch):** CSV, JSON, and Chrome-trace export; `trace_fingerprint` for replay checks. Rayon is an optional `parallel` feature (adds a new dependency), used by `validate_mmc`. `mean_wait_to_precision` stays serial, because its stopping rule depends on replication order. Results match the serial run exactly.
+- [x] Typed time end-to-end: `Time<Unit>` in queue/process/petri/SPN APIs instead of raw `f64`
+  - **Done (pre-release batch):** times and durations are `Time<Seconds>` in queue, process, petri, resource, and stats. Rates and analytic formulas stay `f64`. Breaking, and listed in the changelog. The calendar benchmark shows no measurable cost.
+- [x] Optional `serde` for configs/results; WASM playground; `tpt-des` CLI running a TOML-described queue network
+  - **Done (pre-release batch):** `serde` derives on result types (configs are not serializable: they hold boxed samplers). The CLI is `crates/tpt-des-cli` (unpublished): `run`, `validate`, `size`, and `network` on TOML files. The WASM bindings are `crates/tpt-des-wasm`. The bindings were tested in Node, and the playground page was not run in a browser.
+
+---
+
+# Pre-release checklist (before the first crates.io publish)
+
+Not published, per instruction. The publish itself is still a maintainer decision.
+
+- [x] `#[non_exhaustive]` on public error enums and result/report structs.
+- [x] README badges added (CI, MSRV 1.84, license). The CI badge URL is unverified until GitHub runs CI.
+- [x] `cargo publish --dry-run -p tpt-des-core` passes (with `--allow-dirty`).
+- [ ] `cargo publish --dry-run` for the dependent crates. Blocked: they depend on
+      `tpt-des-core`, which is not on crates.io yet. Publish core first, then the rest in
+      dependency order (core, stats, markov, queue, resource, petri, process, verify, tpt-des).
+      `tpt-des-markov` packages cleanly with `cargo package --no-verify`.
+- [ ] GitHub CI run: Kani, MSRV 1.84, Windows and macOS, the feature matrix, the wasm build.
+      None of these ran locally.
+- [ ] Decide publish target and tag v1.0.0 (Phase 5 above).
+- [x] `tpt-des-cli` and `tpt-des-wasm` are `publish = false` (decision: unpublished for 0.1.0).

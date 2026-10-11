@@ -13,6 +13,7 @@ use crate::net::{Marking, PetriNet};
 use crate::reach::{reachability, ReachabilityError};
 use alloc::vec::Vec;
 use std::collections::BTreeMap;
+use tpt_des_core::{Seconds, Time};
 use tpt_des_markov::Ctmc;
 use tpt_des_markov::MarkovError as CtmcError;
 use tpt_math_prob_core::{Distribution as _, SplitMix64};
@@ -60,7 +61,13 @@ impl StochasticPetriNet {
     /// the stationary distribution.
     ///
     /// Deterministic under `seed`.
-    pub fn simulate(&self, initial: &Marking, horizon: f64, seed: u64) -> Result<SpnRun, SpnError> {
+    pub fn simulate(
+        &self,
+        initial: &Marking,
+        horizon: Time<Seconds>,
+        seed: u64,
+    ) -> Result<SpnRun, SpnError> {
+        let horizon = horizon.raw();
         if initial.0.len() != self.net.places() {
             return Err(SpnError::InvalidInitialMarking);
         }
@@ -114,8 +121,11 @@ impl StochasticPetriNet {
             final_marking: marking,
             firing_counts,
             total_firings,
-            occupancy: occupancy.into_iter().collect(),
-            horizon,
+            occupancy: occupancy
+                .into_iter()
+                .map(|(m, t)| (m, Time::from_raw(t)))
+                .collect(),
+            horizon: Time::from_raw(horizon),
         })
     }
 
@@ -164,6 +174,7 @@ impl StochasticPetriNet {
 
 /// Failures of SPN simulation and conversion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SpnError {
     /// A firing rate was negative or non-finite.
     InvalidRate,
@@ -175,8 +186,8 @@ pub enum SpnError {
     CtmcConversion,
     /// Internal: a categorical draw found no positive rate.
     NoEnabledTransition,
-    /// The horizon is NaN, infinite, or negative. An infinite horizon on a
-    /// live net would never end.
+    /// The horizon is negative. A non-finite horizon cannot be built as a `Time`;
+    /// it panics at construction, so an infinite run is not expressible.
     InvalidHorizon,
     /// A firing would push a place past `u32::MAX` tokens.
     TokenOverflow,
@@ -229,9 +240,9 @@ pub struct SpnRun {
     pub total_firings: u64,
     /// Time spent per distinct marking — the empirical stationary
     /// distribution when the horizon is long.
-    pub occupancy: Vec<(Marking, f64)>,
+    pub occupancy: Vec<(Marking, Time<Seconds>)>,
     /// The simulated horizon.
-    pub horizon: f64,
+    pub horizon: Time<Seconds>,
 }
 
 impl SpnRun {
@@ -240,14 +251,14 @@ impl SpnRun {
         self.occupancy
             .iter()
             .filter(|(m, _)| m == marking)
-            .map(|(_, t)| t)
+            .map(|(_, t)| t.raw())
             .sum::<f64>()
-            / self.horizon
+            / self.horizon.raw()
     }
 
     /// Mean firing rate of transition `t` (firings / horizon).
     pub fn firing_rate(&self, t: usize) -> f64 {
-        self.firing_counts[t] as f64 / self.horizon
+        self.firing_counts[t] as f64 / self.horizon.raw()
     }
 }
 
@@ -275,7 +286,9 @@ mod tests {
     #[test]
     fn poisson_firing_rate_matches_lambda() {
         let spn = poisson_net(5.0);
-        let run = spn.simulate(&Marking(vec![0]), 10_000.0, 42).unwrap();
+        let run = spn
+            .simulate(&Marking(vec![0]), Time::from_raw(10_000.0), 42)
+            .unwrap();
         let measured = run.firing_rate(0);
         assert!(close(measured, 5.0, 0.25), "rate {measured} vs 5.0");
     }
@@ -283,8 +296,12 @@ mod tests {
     #[test]
     fn deterministic_seed_replays() {
         let spn = poisson_net(3.0);
-        let a = spn.simulate(&Marking(vec![0]), 1_000.0, 7).unwrap();
-        let b = spn.simulate(&Marking(vec![0]), 1_000.0, 7).unwrap();
+        let a = spn
+            .simulate(&Marking(vec![0]), Time::from_raw(1_000.0), 7)
+            .unwrap();
+        let b = spn
+            .simulate(&Marking(vec![0]), Time::from_raw(1_000.0), 7)
+            .unwrap();
         assert_eq!(a, b);
     }
 
@@ -299,7 +316,9 @@ mod tests {
         net.add_arc_tp(t, p1, 1);
         let mut spn = StochasticPetriNet::new(net);
         spn.set_rate(t, 1.0).unwrap();
-        let run = spn.simulate(&Marking(vec![1, 0]), 100.0, 1).unwrap();
+        let run = spn
+            .simulate(&Marking(vec![1, 0]), Time::from_raw(100.0), 1)
+            .unwrap();
         assert_eq!(run.final_marking, Marking(vec![0, 1]));
         assert_eq!(run.total_firings, 1);
         // The rest of the horizon is absorbed in the sink marking.
@@ -361,7 +380,9 @@ mod tests {
         let mut spn = StochasticPetriNet::new(net);
         spn.set_rate(arrive, 1.0).unwrap();
         spn.set_rate(serve, 2.0).unwrap();
-        let run = spn.simulate(&Marking(vec![0]), 50_000.0, 9).unwrap();
+        let run = spn
+            .simulate(&Marking(vec![0]), Time::from_raw(50_000.0), 9)
+            .unwrap();
         let frac0 = run.occupancy_fraction(&Marking(vec![0]));
         assert!(close(frac0, 0.5, 0.05), "occupancy of empty queue: {frac0}");
     }

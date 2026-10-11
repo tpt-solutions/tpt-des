@@ -2,6 +2,7 @@
 //! `tpt-des-stats` output analysis reproduces the known analytical
 //! confidence structure (Erlang/Cromer means, Erlang B blocking).
 
+use tpt_des_core::Time;
 use tpt_des_queue::{mm1, run_queue, Discipline, Exponential, QueueConfig};
 use tpt_des_stats::{batch, ci, warmup};
 
@@ -25,8 +26,13 @@ fn replication_deletion_covers_analytical_mean_wait() {
     let warmup = 5_000.0;
     let mut replications: Vec<Vec<f64>> = Vec::new();
     for seed in 1..=6u64 {
-        let m = run_queue(mm1_config(lambda, mu), horizon, warmup, seed * 1_000);
-        replications.push(vec![m.mean_sojourn()]);
+        let m = run_queue(
+            mm1_config(lambda, mu),
+            Time::from_raw(horizon),
+            Time::from_raw(warmup),
+            seed * 1_000,
+        );
+        replications.push(vec![m.mean_sojourn().raw()]);
     }
     let rd = batch::replication_deletion(&replications, 0, 0.95).unwrap();
     assert_eq!(rd.replications, 6);
@@ -55,7 +61,12 @@ fn batch_means_interval_covers_analytical_wait() {
     let mut elapsed = 0.0;
     for seed in 1..=20u64 {
         let chunk = 5_000.0;
-        let m = run_queue(mm1_config(lambda, mu), elapsed + chunk, elapsed * 0.9, seed);
+        let m = run_queue(
+            mm1_config(lambda, mu),
+            Time::from_raw(elapsed + chunk),
+            Time::from_raw(elapsed * 0.9),
+            seed,
+        );
         series.push(m.utilization());
         elapsed += chunk;
     }
@@ -82,8 +93,13 @@ fn warmup_detection_finds_the_transient() {
         let mut prev = 0.0;
         for chunk in 1..=10u64 {
             let horizon = chunk as f64 * 3_000.0;
-            let m = run_queue(mm1_config(lambda, mu), horizon, prev, seed * 77);
-            series.push(m.mean_sojourn());
+            let m = run_queue(
+                mm1_config(lambda, mu),
+                Time::from_raw(horizon),
+                Time::from_raw(prev),
+                seed * 77,
+            );
+            series.push(m.mean_sojourn().raw());
             prev = horizon;
         }
         per_chunk.push(series);
@@ -103,7 +119,12 @@ fn blocking_proportion_ci_covers_erlang_b() {
 
     let mut config = mm1_config(lambda, mu);
     config.capacity = Some(1);
-    let m = run_queue(config, 200_000.0, 20_000.0, 5);
+    let m = run_queue(
+        config,
+        Time::from_raw(200_000.0),
+        Time::from_raw(20_000.0),
+        5,
+    );
     let attempts = m.arrived + m.blocked;
     assert!(attempts > 10_000);
     let observed = m.blocked as f64 / attempts as f64;

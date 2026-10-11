@@ -1,5 +1,6 @@
 //! Regression tests for the Phase 6 Petri-net fixes.
 
+use tpt_des_core::Time;
 use tpt_des_petri::invariant::place_invariants;
 use tpt_des_petri::spn::{SpnError, MAX_CTMC_STATES};
 use tpt_des_petri::{Marking, PetriNet, StochasticPetriNet};
@@ -48,6 +49,7 @@ fn zero_arc_transition_fires_unchanged() {
 
 /// Infinite horizons never end on a live net: they must be rejected.
 #[test]
+#[should_panic(expected = "simulation time must be finite")]
 fn simulate_rejects_non_finite_horizon() {
     let mut net = PetriNet::new();
     let p = net.add_place("p");
@@ -58,11 +60,11 @@ fn simulate_rejects_non_finite_horizon() {
     spn.set_rate(0, 1.0).unwrap();
     let m = Marking(vec![1]);
     assert_eq!(
-        spn.simulate(&m, f64::INFINITY, 1).err(),
+        spn.simulate(&m, Time::from_raw(-1.0), 1).err(),
         Some(SpnError::InvalidHorizon)
     );
     assert_eq!(
-        spn.simulate(&m, f64::NAN, 1).err(),
+        spn.simulate(&m, Time::from_raw(f64::NAN), 1).err(),
         Some(SpnError::InvalidHorizon)
     );
 }

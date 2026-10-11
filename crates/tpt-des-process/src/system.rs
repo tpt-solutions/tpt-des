@@ -15,6 +15,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Waker};
 use std::sync::Arc;
+use tpt_des_core::{Seconds, Time};
 use tpt_math_prob_core::Rng as _;
 
 pub use crate::ops::Interrupt;
@@ -47,17 +48,17 @@ impl core::fmt::Debug for Sim {
 
 impl Sim {
     /// Current simulation time.
-    pub fn now(&self) -> f64 {
-        self.shared.borrow().now
+    pub fn now(&self) -> Time<Seconds> {
+        Time::from_raw(self.shared.borrow().now)
     }
 
     /// Move the simulation clock forward to `t` (never backwards).
     ///
     /// Hybrid bridges call this to keep the discrete clock synchronized
     /// with continuous integration time.
-    pub fn set_time(&self, t: f64) {
+    pub fn set_time(&self, t: Time<Seconds>) {
         let mut shared = self.shared.borrow_mut();
-        shared.now = shared.now.max(t);
+        shared.now = shared.now.max(t.raw());
     }
 
     /// Next uniform `f64` in `[0, 1)` from the seeded simulation RNG.
@@ -90,8 +91,8 @@ impl Sim {
     /// Suspend the calling process for `duration` seconds.
     ///
     /// Resolves `Err(Interrupt)` if the process is interrupted first.
-    pub fn delay(&self, duration: f64) -> Delay {
-        Delay::new(self.clone(), self.current_pid(), duration)
+    pub fn delay(&self, duration: Time<Seconds>) -> Delay {
+        Delay::new(self.clone(), self.current_pid(), duration.raw())
     }
 
     /// Acquire `amount` units of `resource` (all-or-nothing, FIFO waiters).
@@ -338,12 +339,12 @@ impl ProcessSystem {
     }
 
     /// Current simulation time.
-    pub fn now(&self) -> f64 {
+    pub fn now(&self) -> Time<Seconds> {
         self.sim.now()
     }
 
     /// Move the simulation clock forward (hybrid bridges).
-    pub fn set_time(&self, t: f64) {
+    pub fn set_time(&self, t: Time<Seconds>) {
         self.sim.set_time(t)
     }
 
@@ -376,11 +377,15 @@ impl ProcessSystem {
     /// Run until every process finished, or events are exhausted (which
     /// includes deadlocked condition waits).
     pub fn run(&mut self) {
-        self.run_until(f64::INFINITY);
+        self.run_loop(None);
     }
 
     /// Run until `horizon`, or until events are exhausted.
-    pub fn run_until(&mut self, horizon: f64) {
+    pub fn run_until(&mut self, horizon: Time<Seconds>) {
+        self.run_loop(Some(horizon));
+    }
+
+    fn run_loop(&mut self, horizon: Option<Time<Seconds>>) {
         enum Action {
             Poll(ProcessId),
             Pump,
@@ -395,7 +400,7 @@ impl ProcessSystem {
                     Action::Poll(pid)
                 } else {
                     match shared.timers.next_time() {
-                        Some(t) if t <= horizon => Action::Pump,
+                        Some(t) if horizon.is_none_or(|h| t <= h) => Action::Pump,
                         _ => Action::Stop,
                     }
                 }
@@ -420,10 +425,14 @@ impl ProcessSystem {
     /// process runnable. Firing one timer at a time keeps the clock from
     /// running ahead of processes that are already runnable at an earlier
     /// instant.
-    fn pump_one(&self, horizon: f64) {
+    fn pump_one(&self, horizon: Option<Time<Seconds>>) {
         let mut shared = self.sim.shared.borrow_mut();
-        if let Some(popped) = shared.timers.pop_until(horizon) {
-            shared.now = shared.now.max(popped.time);
+        let next = match horizon {
+            Some(h) => shared.timers.pop_until(h),
+            None => shared.timers.pop(),
+        };
+        if let Some(popped) = next {
+            shared.now = shared.now.max(popped.time.raw());
             let pid = popped.payload;
             shared.pending_timers.remove(&pid);
             shared.ready.push_back(pid);

@@ -6,6 +6,7 @@
 //! processor-sharing insensitivity result.
 
 use proptest::prelude::*;
+use tpt_des_core::Time;
 use tpt_des_queue::{mm1, mm1_pn, run_queue, Discipline, Exponential, QueueConfig};
 use tpt_des_verify::strategies::stable_queue_params;
 
@@ -37,14 +38,14 @@ fn replicated_means(
     for i in 0..REPLICATIONS {
         let m = run_queue(
             mm1_config(lambda, mu, discipline),
-            horizon,
-            warmup,
+            Time::from_raw(horizon),
+            Time::from_raw(warmup),
             seed.wrapping_add(i),
         );
         // Need enough completions in each replication for a meaningful sample.
         assert!(m.completed > 1_000, "too few completions: {}", m.completed);
-        sums[0] += m.mean_wait();
-        sums[1] += m.mean_sojourn();
+        sums[0] += m.mean_wait().raw();
+        sums[1] += m.mean_sojourn().raw();
         sums[2] += m.time_avg_number();
         sums[3] += m.utilization();
     }
@@ -90,7 +91,7 @@ proptest! {
         let mut config = mm1_config(lambda, mu, Discipline::Fifo);
         config.capacity = Some(k);
         let horizon = 40_000.0;
-        let metrics = run_queue(config, horizon, horizon / 10.0, seed);
+        let metrics = run_queue(config, Time::from_raw(horizon), Time::from_raw(horizon / 10.0), seed);
         let a = lambda / mu;
         let b = tpt_des_queue::erlang_b(a, k as u32).unwrap();
 
@@ -162,9 +163,24 @@ fn fifo_lifo_agree_on_mean_sojourn() {
 #[test]
 fn deterministic_replay_reproduces_metrics() {
     let config = || mm1_config(0.7, 1.0, Discipline::Fifo);
-    let a = run_queue(config(), 10_000.0, 1_000.0, 123);
-    let b = run_queue(config(), 10_000.0, 1_000.0, 123);
+    let a = run_queue(
+        config(),
+        Time::from_raw(10_000.0),
+        Time::from_raw(1_000.0),
+        123,
+    );
+    let b = run_queue(
+        config(),
+        Time::from_raw(10_000.0),
+        Time::from_raw(1_000.0),
+        123,
+    );
     assert_eq!(a, b);
-    let c = run_queue(config(), 10_000.0, 1_000.0, 124);
+    let c = run_queue(
+        config(),
+        Time::from_raw(10_000.0),
+        Time::from_raw(1_000.0),
+        124,
+    );
     assert_ne!(a, c);
 }

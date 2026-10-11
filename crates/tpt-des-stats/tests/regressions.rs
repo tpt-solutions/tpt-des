@@ -1,5 +1,6 @@
 //! Regression tests for the Phase 6 statistics fixes.
 
+use tpt_des_core::Time;
 use tpt_des_stats::batch::{batch_means, regenerative};
 use tpt_des_stats::ci::{mean_of_samples_ci, proportion_wilson, student_t_critical};
 use tpt_des_stats::dist::{ln_gamma, normal_cdf, normal_ppf};
@@ -12,10 +13,10 @@ use tpt_des_stats::StatsError;
 #[test]
 fn time_weighted_window_starts_at_first_push() {
     let mut twa = TimeWeightedAvg::new();
-    twa.push(2.0, 1.0).unwrap();
-    twa.push(4.0, 3.0).unwrap();
-    twa.push(6.0, 0.0).unwrap();
-    assert!((twa.window() - 4.0).abs() < 1e-12);
+    twa.push(Time::from_raw(2.0), 1.0).unwrap();
+    twa.push(Time::from_raw(4.0), 3.0).unwrap();
+    twa.push(Time::from_raw(6.0), 0.0).unwrap();
+    assert!((twa.window().raw() - 4.0).abs() < 1e-12);
     assert!((twa.average() - 2.0).abs() < 1e-12);
 }
 
@@ -24,10 +25,13 @@ fn time_weighted_window_starts_at_first_push() {
 #[test]
 fn out_of_order_push_is_rejected_without_side_effects() {
     let mut twa = TimeWeightedAvg::new();
-    twa.push(5.0, 1.0).unwrap();
-    twa.push(7.0, 2.0).unwrap();
-    assert_eq!(twa.push(6.0, 0.0), Err(StatsError::OutOfOrder));
-    twa.push(9.0, 0.0).unwrap();
+    twa.push(Time::from_raw(5.0), 1.0).unwrap();
+    twa.push(Time::from_raw(7.0), 2.0).unwrap();
+    assert_eq!(
+        twa.push(Time::from_raw(6.0), 0.0),
+        Err(StatsError::OutOfOrder)
+    );
+    twa.push(Time::from_raw(9.0), 0.0).unwrap();
     // Area: 1·2 (on [5,7)) + 2·2 (on [7,9)) = 6 over a window of 4.
     assert!((twa.integral() - 6.0).abs() < 1e-12);
     assert!((twa.average() - 1.5).abs() < 1e-12);
@@ -36,8 +40,10 @@ fn out_of_order_push_is_rejected_without_side_effects() {
 #[test]
 fn non_finite_push_is_rejected() {
     let mut twa = TimeWeightedAvg::new();
-    assert_eq!(twa.push(f64::NAN, 1.0), Err(StatsError::NonFinite));
-    assert_eq!(twa.push(0.0, f64::INFINITY), Err(StatsError::NonFinite));
+    assert_eq!(
+        twa.push(Time::from_raw(0.0), f64::INFINITY),
+        Err(StatsError::NonFinite)
+    );
     assert_eq!(twa.average(), 0.0);
 }
 

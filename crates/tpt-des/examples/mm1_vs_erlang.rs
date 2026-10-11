@@ -2,6 +2,7 @@
 //! sojourn time against the analytical (Erlang/Cromer) formula
 //! `W = 1/(μ − λ)`.
 
+use tpt_des::kernel::Time;
 use tpt_des::queue::{mm1, run_queue, Discipline, Exponential, QueueConfig};
 
 fn main() {
@@ -16,8 +17,8 @@ fn main() {
             capacity: None,
             priority: None,
         },
-        100_000.0,
-        10_000.0,
+        Time::from_raw(100_000.0),
+        Time::from_raw(10_000.0),
         2024,
     );
 
@@ -25,12 +26,12 @@ fn main() {
     println!("  metric       simulated   analytical");
     println!(
         "  W  (sojourn) {:>10.4}   {:>10.4}",
-        metrics.mean_sojourn(),
+        metrics.mean_sojourn().raw(),
         exact.w
     );
     println!(
         "  Wq (wait)    {:>10.4}   {:>10.4}",
-        metrics.mean_wait(),
+        metrics.mean_wait().raw(),
         exact.wq
     );
     println!(
@@ -44,7 +45,7 @@ fn main() {
         exact.rho
     );
 
-    let rel = (metrics.mean_sojourn() - exact.w).abs() / exact.w;
+    let rel = (metrics.mean_sojourn().raw() - exact.w).abs() / exact.w;
     println!("\nrelative error on W: {rel:.2}%");
     assert!(rel < 0.15, "simulation diverged from Erlang theory");
 }

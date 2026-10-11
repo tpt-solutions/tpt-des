@@ -8,6 +8,7 @@
 //!
 //! Run with `cargo run -p tpt-des --example hybrid_bridge --features "std process"`.
 
+use tpt_des::kernel::{Seconds, Time};
 use tpt_des::process::hybrid::{ContinuousModel, HybridBridge};
 use tpt_des::process::{ProcessSystem, Sim};
 
@@ -21,8 +22,8 @@ struct Tank {
 }
 
 impl ContinuousModel for Tank {
-    fn integrate(&mut self, dt: f64) {
-        self.level += RATE * dt;
+    fn integrate(&mut self, dt: Time<Seconds>) {
+        self.level += RATE * dt.raw();
     }
 
     fn guard(&self) -> f64 {
@@ -37,7 +38,7 @@ fn main() {
     let filler = system.spawn(|sim: Sim| async move {
         sim.acquire(0, 1).await?;
         // The delay is far longer than the fill time; the guard interrupts it.
-        let outcome = sim.delay(1_000.0).await;
+        let outcome = sim.delay(Time::from_raw(1_000.0)).await;
         sim.release(0, 1);
         println!(
             "valve released at t = {:.2} s (interrupted: {})",
@@ -47,11 +48,11 @@ fn main() {
         Ok(())
     });
 
-    let mut bridge = HybridBridge::new(filler, THRESHOLD, STEP);
+    let mut bridge = HybridBridge::new(filler, THRESHOLD, Time::from_raw(STEP));
     bridge.attach(Tank { level: 0.0 });
 
-    while !system.is_finished(filler) && bridge.now() < 1_000.0 {
-        bridge.step(&system, STEP);
+    while !system.is_finished(filler) && bridge.now().raw() < 1_000.0 {
+        bridge.step(&system, Time::from_raw(STEP));
         system.set_time(bridge.now());
         system.run_until(bridge.now());
     }
@@ -60,7 +61,7 @@ fn main() {
     println!("expected crossing at t = {expected:.2} s");
     assert!(bridge.fired(), "the guard should have fired");
     assert!(
-        (bridge.now() - expected).abs() < 2.0 * STEP,
+        (bridge.now().raw() - expected).abs() < 2.0 * STEP,
         "crossing time off by more than two steps"
     );
 }

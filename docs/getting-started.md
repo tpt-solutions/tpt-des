@@ -36,8 +36,8 @@ fn main() {
             capacity: None,
             priority: None,
         },
-        50_000.0, // horizon: simulated time to run
-        5_000.0,  // warm-up: discard measurements before this time
+        Time::from_raw(50_000.0), // horizon: simulated time to run
+        Time::from_raw(5_000.0),  // warm-up: discard measurements before this time
         42,       // seed: the same seed gives the same result
     );
 

@@ -16,6 +16,7 @@ use crate::analytic::{mmc, MmcResult};
 use crate::error::QueueError;
 use crate::sim::{run_queue_multi, Discipline, Exponential, QueueConfig, QueueMetrics};
 use core::fmt;
+use tpt_des_core::{Seconds, Time};
 use tpt_des_stats::ci::student_t_critical;
 
 /// Most servers [`size_for_mean_wait`] will try before giving up.
@@ -28,6 +29,7 @@ pub const MIN_REPLICATIONS: u32 = 3;
 /// The result of [`size_for_mean_wait`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct Sizing {
     /// The smallest server count that meets the target.
     pub servers: u32,
@@ -46,8 +48,12 @@ pub struct Sizing {
 ///
 /// [`QueueError::InvalidParameter`] if `max_wait` is not finite and positive,
 /// the rates are invalid, or no count up to [`MAX_SERVERS`] meets the target.
-pub fn size_for_mean_wait(lambda: f64, mu: f64, max_wait: f64) -> Result<Sizing, QueueError> {
-    if !max_wait.is_finite() || max_wait <= 0.0 {
+pub fn size_for_mean_wait(
+    lambda: f64,
+    mu: f64,
+    max_wait: Time<Seconds>,
+) -> Result<Sizing, QueueError> {
+    if !max_wait.raw().is_finite() || max_wait.raw() <= 0.0 {
         return Err(QueueError::InvalidParameter);
     }
     if !(lambda > 0.0 && mu > 0.0) {
@@ -56,7 +62,7 @@ pub fn size_for_mean_wait(lambda: f64, mu: f64, max_wait: f64) -> Result<Sizing,
     let first = (lambda / mu).floor() as u32 + 1;
     for servers in first..=MAX_SERVERS {
         let analytic = mmc(lambda, mu, servers)?;
-        if analytic.wq <= max_wait {
+        if analytic.wq <= max_wait.raw() {
             return Ok(Sizing { servers, analytic });
         }
     }
@@ -66,6 +72,7 @@ pub fn size_for_mean_wait(lambda: f64, mu: f64, max_wait: f64) -> Result<Sizing,
 /// Mean and standard error over independent replications.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct Estimate {
     /// Mean of the replication means.
     pub mean: f64,
@@ -97,6 +104,7 @@ impl Estimate {
 /// One metric in a [`ValidationReport`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct ValidationRow {
     /// Metric name: `Wq`, `W`, `L`, or `rho`.
     pub metric: &'static str,
@@ -111,6 +119,7 @@ pub struct ValidationRow {
 /// Simulation versus analytic M/M/c metrics for one station.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct ValidationReport {
     /// Number of servers simulated.
     pub servers: u32,
@@ -183,40 +192,63 @@ pub fn validate_mmc(
     lambda: f64,
     mu: f64,
     servers: u32,
-    horizon: f64,
-    warmup: f64,
+    horizon: Time<Seconds>,
+    warmup: Time<Seconds>,
     replications: u32,
     seed: u64,
 ) -> Result<ValidationReport, QueueError> {
     let analytic = mmc(lambda, mu, servers)?;
-    if replications < 2 || !(horizon.is_finite() && horizon > 0.0) {
+    if replications < 2 || !(horizon.raw().is_finite() && horizon.raw() > 0.0) {
         return Err(QueueError::InvalidParameter);
     }
-    if !(warmup.is_finite() && (0.0..horizon).contains(&warmup)) {
+    if !(warmup.raw().is_finite() && (0.0..horizon.raw()).contains(&warmup.raw())) {
         return Err(QueueError::InvalidParameter);
     }
 
-    let runs = (0..replications)
-        .map(|i| {
-            let config = exponential_config(lambda, mu)?;
-            Ok(run_queue_multi(
-                config,
-                servers as usize,
-                horizon,
-                warmup,
-                seed.wrapping_add(u64::from(i)),
-            ))
-        })
-        .collect::<Result<Vec<QueueMetrics>, QueueError>>()?;
+    let runs = map_replications(replications, |i| {
+        let config = exponential_config(lambda, mu)?;
+        Ok(run_queue_multi(
+            config,
+            servers as usize,
+            horizon,
+            warmup,
+            seed.wrapping_add(u64::from(i)),
+        ))
+    })
+    .into_iter()
+    .collect::<Result<Vec<QueueMetrics>, QueueError>>()?;
 
     let column = |f: fn(&QueueMetrics) -> f64| runs.iter().map(f).collect::<Vec<f64>>();
     let rows = vec![
-        validation_row("Wq", analytic.wq, &column(QueueMetrics::mean_wait)),
-        validation_row("W", analytic.w, &column(QueueMetrics::mean_sojourn)),
+        validation_row("Wq", analytic.wq, &column(|m| m.mean_wait().raw())),
+        validation_row("W", analytic.w, &column(|m| m.mean_sojourn().raw())),
         validation_row("L", analytic.l, &column(QueueMetrics::time_avg_number)),
         validation_row("rho", analytic.rho, &column(QueueMetrics::utilization)),
     ];
     Ok(ValidationReport { servers, rows })
+}
+
+/// Evaluate `f` for replication indices `0..replications`, in index order.
+///
+/// With the `parallel` feature the calls run on rayon's pool. Each call must
+/// depend only on its index, so the result is the same either way.
+#[cfg(feature = "parallel")]
+fn map_replications<T, F>(replications: u32, f: F) -> Vec<T>
+where
+    T: Send,
+    F: Fn(u32) -> T + Sync + Send,
+{
+    use rayon::prelude::*;
+    (0..replications).into_par_iter().map(f).collect()
+}
+
+/// Serial version of [`map_replications`], used without the `parallel` feature.
+#[cfg(not(feature = "parallel"))]
+fn map_replications<T, F>(replications: u32, f: F) -> Vec<T>
+where
+    F: Fn(u32) -> T,
+{
+    (0..replications).map(f).collect()
 }
 
 fn validation_row(metric: &'static str, analytic_value: f64, samples: &[f64]) -> ValidationRow {
@@ -243,6 +275,7 @@ fn exponential_config(lambda: f64, mu: f64) -> Result<QueueConfig, QueueError> {
 /// The result of [`mean_wait_to_precision`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct PrecisionRun {
     /// Mean queue wait over the replications run.
     pub estimate: Estimate,
@@ -274,19 +307,19 @@ pub struct PrecisionRun {
 pub fn mean_wait_to_precision(
     mut config: impl FnMut() -> QueueConfig,
     servers: usize,
-    horizon: f64,
-    warmup: f64,
-    target_half_width: f64,
+    horizon: Time<Seconds>,
+    warmup: Time<Seconds>,
+    target_half_width: Time<Seconds>,
     confidence: f64,
     max_replications: u32,
     seed: u64,
 ) -> Result<PrecisionRun, QueueError> {
-    if !(target_half_width.is_finite() && target_half_width > 0.0)
+    if !(target_half_width.raw().is_finite() && target_half_width.raw() > 0.0)
         || !(confidence > 0.0 && confidence < 1.0)
         || servers == 0
         || max_replications < MIN_REPLICATIONS
-        || !(horizon.is_finite() && horizon > 0.0)
-        || !(warmup.is_finite() && (0.0..horizon).contains(&warmup))
+        || !(horizon.raw().is_finite() && horizon.raw() > 0.0)
+        || !(warmup.raw().is_finite() && (0.0..horizon.raw()).contains(&warmup.raw()))
     {
         return Err(QueueError::InvalidParameter);
     }
@@ -300,14 +333,14 @@ pub fn mean_wait_to_precision(
             warmup,
             seed.wrapping_add(u64::from(i)),
         );
-        waits.push(metrics.mean_wait());
+        waits.push(metrics.mean_wait().raw());
         if (waits.len() as u32) < MIN_REPLICATIONS {
             continue;
         }
         let estimate = Estimate::from_samples(&waits);
         let df = waits.len() - 1;
         let half_width = student_t_critical(confidence, df) * estimate.std_error;
-        if half_width <= target_half_width {
+        if half_width <= target_half_width.raw() {
             return Ok(PrecisionRun {
                 estimate,
                 half_width,
@@ -328,13 +361,14 @@ pub fn mean_wait_to_precision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tpt_des_core::Time;
 
     #[test]
     fn sizing_finds_the_fewest_servers() {
         // λ = 4, μ = 1: at least 5 servers for stability. Check the result is
         // minimal by confirming one fewer server misses the target.
         let target = 0.2;
-        let s = size_for_mean_wait(4.0, 1.0, target).unwrap();
+        let s = size_for_mean_wait(4.0, 1.0, Time::from_raw(target)).unwrap();
         assert!(s.analytic.wq <= target);
         assert!(s.servers >= 5);
         let fewer = mmc(4.0, 1.0, s.servers - 1);
@@ -351,11 +385,11 @@ mod tests {
     #[test]
     fn sizing_rejects_bad_targets() {
         assert_eq!(
-            size_for_mean_wait(1.0, 1.0, 0.0),
+            size_for_mean_wait(1.0, 1.0, Time::from_raw(0.0)),
             Err(QueueError::InvalidParameter)
         );
         assert_eq!(
-            size_for_mean_wait(1.0, 1.0, f64::NAN),
+            size_for_mean_wait(1.0, 1.0, Time::from_raw(-1.0)),
             Err(QueueError::InvalidParameter)
         );
     }
@@ -363,16 +397,65 @@ mod tests {
     #[test]
     fn validation_passes_for_a_correct_model() {
         // ρ = 0.8 on three servers: a regime where the wait is non-trivial.
-        let report = validate_mmc(2.4, 1.0, 3, 20_000.0, 2_000.0, 6, 3).unwrap();
+        let report = validate_mmc(
+            2.4,
+            1.0,
+            3,
+            Time::from_raw(20_000.0),
+            Time::from_raw(2_000.0),
+            6,
+            3,
+        )
+        .unwrap();
         assert_eq!(report.rows.len(), 4);
         report.assert_passes();
+    }
+
+    #[test]
+    fn validation_report_is_reproducible_and_ordered() {
+        // With the `parallel` feature the replications run on a pool; the report
+        // must not depend on scheduling.
+        let a = validate_mmc(
+            2.4,
+            1.0,
+            3,
+            Time::from_raw(10_000.0),
+            Time::from_raw(1_000.0),
+            4,
+            9,
+        )
+        .unwrap();
+        let b = validate_mmc(
+            2.4,
+            1.0,
+            3,
+            Time::from_raw(10_000.0),
+            Time::from_raw(1_000.0),
+            4,
+            9,
+        )
+        .unwrap();
+        assert_eq!(a, b);
+        assert_eq!(
+            map_replications(6, |i| i * 3),
+            (0..6).map(|i| i * 3).collect::<Vec<u32>>()
+        );
     }
 
     #[test]
     fn validation_flags_a_wrong_analytic_value() {
         // Compare a 3-server simulation against the analytic value for 1
         // server: the report must say no.
-        let mut report = validate_mmc(0.8, 1.0, 3, 20_000.0, 2_000.0, 4, 5).unwrap();
+        let mut report = validate_mmc(
+            0.8,
+            1.0,
+            3,
+            Time::from_raw(20_000.0),
+            Time::from_raw(2_000.0),
+            4,
+            5,
+        )
+        .unwrap();
         let wrong = mmc(0.8, 1.0, 1).unwrap().wq;
         let row = report.rows.iter_mut().find(|r| r.metric == "Wq").unwrap();
         row.analytic = wrong;
@@ -390,12 +473,32 @@ mod tests {
             capacity: None,
             priority: None,
         };
-        let loose = mean_wait_to_precision(mk, 1, 5_000.0, 500.0, 0.5, 0.95, 20, 1).unwrap();
+        let loose = mean_wait_to_precision(
+            mk,
+            1,
+            Time::from_raw(5_000.0),
+            Time::from_raw(500.0),
+            Time::from_raw(0.5),
+            0.95,
+            20,
+            1,
+        )
+        .unwrap();
         assert!(loose.converged);
         assert!(loose.half_width <= 0.5);
 
         // An unreachable target with a tiny budget must say it did not converge.
-        let tight = mean_wait_to_precision(mk, 1, 500.0, 50.0, 1e-9, 0.95, 3, 1).unwrap();
+        let tight = mean_wait_to_precision(
+            mk,
+            1,
+            Time::from_raw(500.0),
+            Time::from_raw(50.0),
+            Time::from_raw(1e-9),
+            0.95,
+            3,
+            1,
+        )
+        .unwrap();
         assert!(!tight.converged);
         assert_eq!(tight.estimate.replications, 3);
     }

@@ -25,7 +25,9 @@ the spec item is implemented. *Not implemented* means no code exists for it.
 | Jackson networks | Done | `JacksonNetwork` (open networks with routing matrices) |
 | Closed networks with routing matrices | Done | Single-chain by exact MVA (`ClosedNetwork`). Multi-class by exact MVA over the population lattice (`MultiClassClosed`), with visit ratios from each class's routing matrix. The lattice is capped at `MAX_STATES` (100 000). Exact for processor-sharing nodes, and for FCFS nodes with exponential service that is the same across classes. |
 | Multi-server simulation and capacity planning | Done | `run_queue_multi` runs c servers. `planning::size_for_mean_wait` gives the fewest servers that meet a mean-wait target. `planning::validate_mmc` compares simulation with M/M/c. `planning::mean_wait_to_precision` adds replications until the CI half-width meets a target. Processor sharing is single-server only. |
-| Job-level trace export | Done | `run_queue_traced` and `trace_to_csv` (one row per completed job). JSON and Chrome-trace output are not implemented. |
+| Job-level trace export | Done | `run_queue_traced`, with `trace_to_csv`, `trace_to_json`, and `trace_to_chrome` (Chrome Trace Event format, one lane per concurrent service), plus `trace_fingerprint`, a 64-bit replay check over the seed and records. |
+| Parallel replications | Done (validation only) | Feature `parallel` (rayon) in `tpt-des-queue`, used by `validate_mmc`. Results match the serial run exactly. `mean_wait_to_precision` stays serial, because its stopping rule depends on replication order. |
+| Typed time | Done | Times and durations in public APIs are `Time<Seconds>`. Rates and dimensionless values stay `f64`. See the changelog for the breaking list. |
 | DES queues with arbitrary distributions | Done | `RateSampler`; `FromClosure` takes any distribution |
 | FIFO, LIFO, priority, processor sharing | Done | Priority classes come from `QueueConfig::priority`. Before the Phase 6 fixes, priority behaved as FIFO. |
 
@@ -95,6 +97,8 @@ non-blocking job. Run `just kani` to check them locally.
 | `tpt-systems-optimisation` integration (server-count optimization) | Deferred | Out of scope for this pass. The single-server and multi-class solvers it would call now exist. |
 | End-to-end multi-class network test (Phase 3 in the spec) | Partial | Unit-level checks: a single class matches the single-chain MVA, customer counts are conserved, identical classes aggregate correctly, and routing is validated. The server-count optimization test is deferred with the integration above. |
 | `tpt-swarm`, `tpt-robotics`, `tpt-eve` / `tpt-anima` | Not implemented | Named in the spec as ecosystem integrations, outside this repository |
+| Command-line runner | Done (unpublished) | `crates/tpt-des-cli`, binary `tpt-des`: `run`, `validate`, `size`, and `network` on TOML files |
+| WebAssembly bindings and playground | Done (unpublished) | `crates/tpt-des-wasm`. Bindings were tested in Node. The playground page was not run in a browser. |
 
 ## Licensing
 

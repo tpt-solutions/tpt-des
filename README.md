@@ -1,5 +1,9 @@
 # tpt-des
 
+[![CI](https://github.com/tpt-solutions/tpt-des/actions/workflows/ci.yml/badge.svg)](https://github.com/tpt-solutions/tpt-des/actions/workflows/ci.yml)
+![MSRV](https://img.shields.io/badge/MSRV-1.84-blue)
+![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
+
 A pure-Rust **discrete event simulation (DES)** and stochastic systems
 library: event scheduling, queuing theory, Petri nets, Markov
 chains, resource contention, process-oriented simulation, and rigorous
@@ -44,6 +48,7 @@ Part of the TPT ecosystem; numeric substrate is
 ## Quick start
 
 ```rust
+use tpt_des::kernel::Time;
 use tpt_des::queue::{run_queue, mm1, Discipline, Exponential, QueueConfig};
 
 // Simulate an M/M/1 queue (λ = 0.75, μ = 1) and compare to theory.
@@ -55,12 +60,12 @@ let metrics = run_queue(
         capacity: None,
         priority: None,
     },
-    100_000.0, // horizon
-    10_000.0,  // warm-up
+    Time::from_raw(100_000.0), // horizon
+    Time::from_raw(10_000.0),  // warm-up
     2024,      // seed: deterministic replay
 );
 let exact = mm1(0.75, 1.0).unwrap();
-assert!((metrics.mean_sojourn() - exact.w).abs() / exact.w < 0.15);
+assert!((metrics.mean_sojourn().raw() - exact.w).abs() / exact.w < 0.15);
 ```
 
 ## Worked examples

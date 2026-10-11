@@ -47,6 +47,7 @@ pub struct MultiClassClosed {
 /// Exact MVA results at the full population.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct MultiClassResult {
     /// Throughput of each class, `X_c(N)`. Zero for a class with no customers.
     pub throughput: Vec<f64>,

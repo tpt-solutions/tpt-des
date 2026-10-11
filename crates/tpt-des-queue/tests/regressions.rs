@@ -1,5 +1,6 @@
 //! Regression tests for the Phase 6 queue fixes.
 
+use tpt_des_core::Time;
 use tpt_des_queue::sim::FromClosure;
 use tpt_des_queue::{run_queue, Discipline, Exponential, QueueConfig};
 use tpt_math_prob_core::Rng as _;
@@ -25,19 +26,29 @@ fn priority_discipline_serves_urgent_class_first() {
         ..mm1(lambda, mu, discipline)
     };
 
-    let prio = run_queue(two_class(Discipline::Priority), 60_000.0, 6_000.0, 21);
+    let prio = run_queue(
+        two_class(Discipline::Priority),
+        Time::from_raw(60_000.0),
+        Time::from_raw(6_000.0),
+        21,
+    );
     let w_urgent = prio.mean_wait_for_priority(0).expect("class 0 served");
     let w_bulk = prio.mean_wait_for_priority(1).expect("class 1 served");
     assert!(
-        w_urgent < 0.6 * w_bulk,
+        w_urgent.raw() < 0.6 * w_bulk.raw(),
         "urgent wait {w_urgent} should be well below bulk wait {w_bulk}"
     );
 
     // Non-preemptive priority is work-conserving: the overall mean wait
     // matches FIFO (Kleinrock's conservation law), even though the split
     // between classes does not.
-    let fifo = run_queue(two_class(Discipline::Fifo), 60_000.0, 6_000.0, 21);
-    let rel = (prio.mean_wait() - fifo.mean_wait()).abs() / fifo.mean_wait();
+    let fifo = run_queue(
+        two_class(Discipline::Fifo),
+        Time::from_raw(60_000.0),
+        Time::from_raw(6_000.0),
+        21,
+    );
+    let rel = (prio.mean_wait().raw() - fifo.mean_wait().raw()).abs() / fifo.mean_wait().raw();
     assert!(rel < 0.15, "overall waits differ by {rel:.3} (relative)");
 }
 
@@ -51,13 +62,13 @@ fn priority_discipline_serves_urgent_class_first() {
 #[test]
 fn time_average_is_exact_over_warmup_window_and_closed_at_horizon() {
     let config = QueueConfig {
-        arrival: Box::new(FromClosure::new("every-1s", |_| 1.0)),
-        service: Box::new(FromClosure::new("0.75s", |_| 0.75)),
+        arrival: Box::new(FromClosure::new("every-1s", |_| Time::from_raw(1.0))),
+        service: Box::new(FromClosure::new("0.75s", |_| Time::from_raw(0.75))),
         discipline: Discipline::Fifo,
         capacity: None,
         priority: None,
     };
-    let m = run_queue(config, 20.0, 10.25, 1);
+    let m = run_queue(config, Time::from_raw(20.0), Time::from_raw(10.25), 1);
     let expected = 7.25 / 9.75;
     assert!(
         (m.time_avg_number() - expected).abs() < 1e-9,
@@ -68,41 +79,51 @@ fn time_average_is_exact_over_warmup_window_and_closed_at_horizon() {
 }
 
 #[test]
-#[should_panic(expected = "inter-arrival sample must be finite and non-negative")]
+#[should_panic(expected = "simulation time must be finite")]
 fn nan_interarrival_sample_is_rejected() {
     let config = QueueConfig {
-        arrival: Box::new(FromClosure::new("nan", |_| f64::NAN)),
+        arrival: Box::new(FromClosure::new("nan", |_| Time::from_raw(f64::NAN))),
         service: Box::new(Exponential::new(1.0).unwrap()),
         discipline: Discipline::Fifo,
         capacity: None,
         priority: None,
     };
-    run_queue(config, 10.0, 0.0, 1);
+    run_queue(config, Time::from_raw(10.0), Time::from_raw(0.0), 1);
 }
 
 #[test]
-#[should_panic(expected = "service sample must be finite and non-negative")]
+#[should_panic(expected = "service sample must be non-negative")]
 fn negative_service_sample_is_rejected() {
     let config = QueueConfig {
         arrival: Box::new(Exponential::new(0.5).unwrap()),
-        service: Box::new(FromClosure::new("neg", |_| -1.0)),
+        service: Box::new(FromClosure::new("neg", |_| Time::from_raw(-1.0))),
         discipline: Discipline::Fifo,
         capacity: None,
         priority: None,
     };
-    run_queue(config, 10.0, 0.0, 1);
+    run_queue(config, Time::from_raw(10.0), Time::from_raw(0.0), 1);
 }
 
 #[test]
 #[should_panic(expected = "warm-up must lie in [0, horizon)")]
 fn warmup_not_before_horizon_is_rejected() {
-    run_queue(mm1(0.5, 1.0, Discipline::Fifo), 100.0, 100.0, 1);
+    run_queue(
+        mm1(0.5, 1.0, Discipline::Fifo),
+        Time::from_raw(100.0),
+        Time::from_raw(100.0),
+        1,
+    );
 }
 
 #[test]
-#[should_panic(expected = "horizon must be finite and positive")]
+#[should_panic(expected = "simulation time must be finite")]
 fn nan_horizon_is_rejected() {
-    run_queue(mm1(0.5, 1.0, Discipline::Fifo), f64::NAN, 0.0, 1);
+    run_queue(
+        mm1(0.5, 1.0, Discipline::Fifo),
+        Time::from_raw(f64::NAN),
+        Time::from_raw(0.0),
+        1,
+    );
 }
 
 /// Erlang C via the Erlang-B recursion (numerically stable at any c):
@@ -171,8 +192,18 @@ fn single_class_priority_matches_fifo_exactly() {
         priority: Some(Box::new(|_| 0)),
         ..mm1(lambda, mu, Discipline::Priority)
     };
-    let prio = run_queue(same_class, 20_000.0, 2_000.0, 5);
-    let fifo = run_queue(mm1(lambda, mu, Discipline::Fifo), 20_000.0, 2_000.0, 5);
+    let prio = run_queue(
+        same_class,
+        Time::from_raw(20_000.0),
+        Time::from_raw(2_000.0),
+        5,
+    );
+    let fifo = run_queue(
+        mm1(lambda, mu, Discipline::Fifo),
+        Time::from_raw(20_000.0),
+        Time::from_raw(2_000.0),
+        5,
+    );
     assert_eq!(prio, fifo);
 }
 
@@ -184,8 +215,8 @@ fn processor_sharing_utilization_is_busy_fraction_not_population() {
     let (lambda, mu) = (0.6, 1.0);
     let m = run_queue(
         mm1(lambda, mu, Discipline::ProcessorSharing),
-        40_000.0,
-        4_000.0,
+        Time::from_raw(40_000.0),
+        Time::from_raw(4_000.0),
         9,
     );
     let rho = lambda / mu;

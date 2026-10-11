@@ -24,7 +24,7 @@ use tpt_math_prob_dist::{exp, Dist};
 /// A source of i.i.d. durations (inter-arrival or service times).
 pub trait RateSampler: fmt::Debug {
     /// Draw the next duration.
-    fn draw(&mut self, rng: &mut SimRng) -> f64;
+    fn draw(&mut self, rng: &mut SimRng) -> Time<Seconds>;
 }
 
 /// Exponential durations at the given rate — the Markovian case.
@@ -49,16 +49,22 @@ impl Exponential {
 }
 
 impl RateSampler for Exponential {
-    fn draw(&mut self, rng: &mut SimRng) -> f64 {
+    fn draw(&mut self, rng: &mut SimRng) -> Time<Seconds> {
         // `Dist` adapts rand_distr's `Exp` to the tpt-math `Rng` trait.
-        Dist::new(exp(self.rate).expect("rate validated at construction")).sample(rng.core_mut())
+        Time::from_raw(
+            Dist::new(exp(self.rate).expect("rate validated at construction"))
+                .sample(rng.core_mut()),
+        )
     }
 }
+
+/// A user-supplied duration generator, as stored by [`FromClosure`].
+pub type DurationFn = Box<dyn Fn(&mut SimRng) -> Time<Seconds> + Send>;
 
 /// Durations from a user-supplied closure (arbitrary distributions).
 pub struct FromClosure {
     name: &'static str,
-    f: Box<dyn Fn(&mut SimRng) -> f64 + Send>,
+    f: DurationFn,
 }
 
 impl fmt::Debug for FromClosure {
@@ -71,7 +77,10 @@ impl fmt::Debug for FromClosure {
 
 impl FromClosure {
     /// Wrap a deterministic-duration generator. `name` appears in Debug output.
-    pub fn new(name: &'static str, f: impl Fn(&mut SimRng) -> f64 + Send + 'static) -> Self {
+    pub fn new(
+        name: &'static str,
+        f: impl Fn(&mut SimRng) -> Time<Seconds> + Send + 'static,
+    ) -> Self {
         Self {
             name,
             f: Box::new(f),
@@ -80,7 +89,7 @@ impl FromClosure {
 }
 
 impl RateSampler for FromClosure {
-    fn draw(&mut self, rng: &mut SimRng) -> f64 {
+    fn draw(&mut self, rng: &mut SimRng) -> Time<Seconds> {
         (self.f)(rng)
     }
 }
@@ -115,6 +124,7 @@ pub enum QueueEvent {
 /// `utilization` are exact for the simulated window.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct QueueMetrics {
     /// Total arrivals accepted (blocked arrivals excluded).
     pub arrived: u64,
@@ -123,17 +133,17 @@ pub struct QueueMetrics {
     /// Jobs that finished service.
     pub completed: u64,
     /// Sum of queue-wait times (arrival → first service).
-    pub total_wait: f64,
+    pub total_wait: Time<Seconds>,
     /// Sum of sojourn times (arrival → departure).
-    pub total_sojourn: f64,
+    pub total_sojourn: Time<Seconds>,
     /// Time-integral of the number of jobs in the system.
     pub area_number: f64,
     /// Time-integral of the number of jobs in service.
     pub area_busy: f64,
     /// Absolute time of the last observation.
-    pub last_t: f64,
+    pub last_t: Time<Seconds>,
     /// Window start for the current accumulation ([`SimQueue::reset_metrics`]).
-    pub reset_at: f64,
+    pub reset_at: Time<Seconds>,
     /// Per-priority-class wait totals, keyed by job priority (lower number =
     /// more urgent). Every job lands in class `0` unless
     /// [`QueueConfig::priority`] is set.
@@ -146,17 +156,18 @@ pub struct QueueMetrics {
 /// Wait-time totals for one priority class.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct ClassWait {
     /// Jobs of this class that started service (post warm-up).
     pub started: u64,
     /// Sum of their queue-wait times.
-    pub total_wait: f64,
+    pub total_wait: Time<Seconds>,
 }
 
 impl QueueMetrics {
     /// Mean queue-wait of jobs in `priority`'s class, or `None` if no job of
     /// that class started service in the measured window.
-    pub fn mean_wait_for_priority(&self, priority: i64) -> Option<f64> {
+    pub fn mean_wait_for_priority(&self, priority: i64) -> Option<Time<Seconds>> {
         self.waits_by_priority
             .get(&priority)
             .filter(|c| c.started > 0)
@@ -164,18 +175,18 @@ impl QueueMetrics {
     }
 
     /// Mean queue-wait over completed jobs (0 if none completed).
-    pub fn mean_wait(&self) -> f64 {
+    pub fn mean_wait(&self) -> Time<Seconds> {
         if self.completed == 0 {
-            0.0
+            Time::ZERO
         } else {
             self.total_wait / self.completed as f64
         }
     }
 
     /// Mean sojourn time over completed jobs.
-    pub fn mean_sojourn(&self) -> f64 {
+    pub fn mean_sojourn(&self) -> Time<Seconds> {
         if self.completed == 0 {
-            0.0
+            Time::ZERO
         } else {
             self.total_sojourn / self.completed as f64
         }
@@ -183,7 +194,7 @@ impl QueueMetrics {
 
     /// Time-average number of jobs in the system.
     pub fn time_avg_number(&self) -> f64 {
-        let span = self.last_t - self.reset_at;
+        let span = (self.last_t - self.reset_at).raw();
         if span <= 0.0 {
             0.0
         } else {
@@ -194,7 +205,7 @@ impl QueueMetrics {
     /// Fraction of time the server had at least one job (or, under
     /// processor sharing, the mean number in service).
     pub fn utilization(&self) -> f64 {
-        let span = self.last_t - self.reset_at;
+        let span = (self.last_t - self.reset_at).raw();
         if span <= 0.0 {
             0.0
         } else {
@@ -217,27 +228,28 @@ struct Job {
 /// The life of one completed job, for trace export.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct JobRecord {
     /// Job number, in arrival order from 0.
     pub job: u64,
     /// Priority class (see [`QueueConfig::priority`]).
     pub priority: i64,
     /// Arrival time.
-    pub arrived_at: f64,
+    pub arrived_at: Time<Seconds>,
     /// Time service began.
-    pub started_at: f64,
+    pub started_at: Time<Seconds>,
     /// Departure time.
-    pub departed_at: f64,
+    pub departed_at: Time<Seconds>,
 }
 
 impl JobRecord {
     /// Time spent waiting before service.
-    pub fn wait(&self) -> f64 {
+    pub fn wait(&self) -> Time<Seconds> {
         self.started_at - self.arrived_at
     }
 
     /// Time from arrival to departure.
-    pub fn sojourn(&self) -> f64 {
+    pub fn sojourn(&self) -> Time<Seconds> {
         self.departed_at - self.arrived_at
     }
 }
@@ -409,7 +421,7 @@ impl fmt::Debug for SimQueue {
 impl SimQueue {
     /// Create a queue entity that must be registered as `id`.
     pub fn new(id: EntityId, config: QueueConfig) -> Self {
-        Self::with_warmup(id, config, 0.0)
+        Self::with_warmup(id, config, Time::ZERO)
     }
 
     /// Create a queue entity with a warm-up cutoff at `warmup` (absolute
@@ -418,7 +430,7 @@ impl SimQueue {
     /// # Panics
     ///
     /// If `warmup` is NaN or negative.
-    pub fn with_warmup(id: EntityId, config: QueueConfig, warmup: f64) -> Self {
+    pub fn with_warmup(id: EntityId, config: QueueConfig, warmup: Time<Seconds>) -> Self {
         Self::with_servers(id, config, warmup, 1)
     }
 
@@ -430,9 +442,14 @@ impl SimQueue {
     /// If `warmup` is NaN or negative, if `servers` is zero, or if `servers`
     /// exceeds one under [`Discipline::ProcessorSharing`] (the simulator's
     /// processor sharing is a single speed-1 processor).
-    pub fn with_servers(id: EntityId, config: QueueConfig, warmup: f64, servers: usize) -> Self {
+    pub fn with_servers(
+        id: EntityId,
+        config: QueueConfig,
+        warmup: Time<Seconds>,
+        servers: usize,
+    ) -> Self {
         assert!(
-            warmup.is_finite() && warmup >= 0.0,
+            warmup.raw().is_finite() && warmup.raw() >= 0.0,
             "warm-up must be a finite, non-negative time, got {warmup}"
         );
         assert!(servers >= 1, "a queue needs at least one server");
@@ -443,7 +460,7 @@ impl SimQueue {
         Self {
             id,
             config,
-            warmup,
+            warmup: warmup.raw(),
             servers,
             trace: None,
             waiting: WaitingLine::default(),
@@ -481,10 +498,10 @@ impl SimQueue {
     /// on the way. The population integral is taken up to the exact cutoff
     /// (and then discarded), so no interval is lost or mis-attributed.
     fn advance_to(&mut self, now: f64) {
-        if self.warmup > 0.0 && now >= self.warmup && self.metrics.reset_at < self.warmup {
+        if self.warmup > 0.0 && now >= self.warmup && self.metrics.reset_at.raw() < self.warmup {
             self.update_integrals(self.warmup);
             self.reset_metrics();
-            self.metrics.reset_at = self.warmup;
+            self.metrics.reset_at = Time::from_raw(self.warmup);
         }
         self.update_integrals(now);
     }
@@ -496,13 +513,13 @@ impl SimQueue {
     /// # Panics
     ///
     /// If `horizon` is not later than the warm-up cutoff.
-    pub fn finalize(&mut self, horizon: f64) {
+    pub fn finalize(&mut self, horizon: Time<Seconds>) {
         assert!(
-            horizon >= self.warmup,
+            horizon.raw() >= self.warmup,
             "horizon {horizon} precedes the warm-up cutoff {}",
             self.warmup
         );
-        self.advance_to(horizon);
+        self.advance_to(horizon.raw());
     }
 
     /// True if a job that arrived at `t` counts toward the measurements.
@@ -516,7 +533,7 @@ impl SimQueue {
     }
 
     fn update_integrals(&mut self, now: f64) {
-        let dt = now - self.metrics.last_t;
+        let dt = now - self.metrics.last_t.raw();
         if dt > 0.0 {
             let in_service = self.population();
             self.metrics.area_number += (self.waiting.len() + in_service) as f64 * dt;
@@ -529,7 +546,7 @@ impl SimQueue {
             };
             self.metrics.area_busy += busy_servers as f64 * dt;
         }
-        self.metrics.last_t = now;
+        self.metrics.last_t = Time::from_raw(now);
     }
 
     /// Pick the next job from the waiting line per the discipline.
@@ -583,8 +600,8 @@ impl SimQueue {
 
 impl Entity<Seconds, QueueEvent> for SimQueue {
     fn on_create(&mut self, ctx: &mut Ctx<'_, Seconds, QueueEvent>) {
-        self.metrics.last_t = 0.0;
-        self.metrics.reset_at = 0.0;
+        self.metrics.last_t = Time::ZERO;
+        self.metrics.reset_at = Time::ZERO;
         self.last_update = 0.0;
         self.schedule_next_arrival(ctx);
     }
@@ -652,7 +669,7 @@ impl Entity<Seconds, QueueEvent> for SimQueue {
                         let job = entry.job;
                         if self.counts(job.arrived_at) {
                             self.metrics.completed += 1;
-                            self.metrics.total_sojourn += now - job.arrived_at;
+                            self.metrics.total_sojourn += Time::from_raw(now - job.arrived_at);
                         }
                         self.record_departure(job, now);
                     }
@@ -663,7 +680,7 @@ impl Entity<Seconds, QueueEvent> for SimQueue {
                         let job = self.in_service.remove(pos);
                         if self.counts(job.arrived_at) {
                             self.metrics.completed += 1;
-                            self.metrics.total_sojourn += now - job.arrived_at;
+                            self.metrics.total_sojourn += Time::from_raw(now - job.arrived_at);
                         }
                         self.record_departure(job, now);
                     }
@@ -680,14 +697,14 @@ impl SimQueue {
     fn start_service(&mut self, job: Job, ctx: &mut Ctx<'_, Seconds, QueueEvent>) {
         if self.counts(job.arrived_at) {
             let wait = ctx.now.raw() - job.arrived_at;
-            self.metrics.total_wait += wait;
+            self.metrics.total_wait += Time::from_raw(wait);
             let class = self
                 .metrics
                 .waits_by_priority
                 .entry(job.priority)
                 .or_default();
             class.started += 1;
-            class.total_wait += wait;
+            class.total_wait += Time::from_raw(wait);
         }
         let service = checked_sample(self.config.service.draw(ctx.rng), "service");
         let id = job.id;
@@ -704,9 +721,9 @@ impl SimQueue {
             trace.push(JobRecord {
                 job: job.id,
                 priority: job.priority,
-                arrived_at: job.arrived_at,
-                started_at: job.started_at,
-                departed_at,
+                arrived_at: Time::from_raw(job.arrived_at),
+                started_at: Time::from_raw(job.started_at),
+                departed_at: Time::from_raw(departed_at),
             });
         }
     }
@@ -714,12 +731,14 @@ impl SimQueue {
 
 /// Reject NaN, infinite, and negative samples from a user distribution:
 /// they would corrupt event ordering (in release builds too).
-fn checked_sample(value: f64, what: &str) -> f64 {
+fn checked_sample(value: Time<Seconds>, what: &str) -> f64 {
+    // `Time` construction already rejects non-finite values.
     assert!(
-        value.is_finite() && value >= 0.0,
-        "{what} sample must be finite and non-negative, got {value}"
+        value.raw() >= 0.0,
+        "{what} sample must be non-negative, got {}",
+        value.raw()
     );
-    value
+    value.raw()
 }
 
 fn event_id_of(event: &QueueEvent) -> u64 {
@@ -745,6 +764,7 @@ fn event_id_of(event: &QueueEvent) -> u64 {
 ///
 /// ```
 /// use tpt_des_queue::{run_queue, Discipline, Exponential, QueueConfig};
+/// use tpt_des_core::Time;
 ///
 /// let metrics = run_queue(
 ///     QueueConfig {
@@ -754,13 +774,18 @@ fn event_id_of(event: &QueueEvent) -> u64 {
 ///         capacity: None,
 ///         priority: None,
 ///     },
-///     20_000.0, // horizon
-///     2_000.0,  // warm-up
+///     Time::from_raw(20_000.0), // horizon
+///     Time::from_raw(2_000.0),  // warm-up
 ///     42,       // seed
 /// );
-/// assert!((metrics.mean_sojourn() - 2.0).abs() < 0.4);
+/// assert!((metrics.mean_sojourn().raw() - 2.0).abs() < 0.4);
 /// ```
-pub fn run_queue(config: QueueConfig, horizon: f64, warmup: f64, seed: u64) -> QueueMetrics {
+pub fn run_queue(
+    config: QueueConfig,
+    horizon: Time<Seconds>,
+    warmup: Time<Seconds>,
+    seed: u64,
+) -> QueueMetrics {
     run_queue_multi(config, 1, horizon, warmup, seed)
 }
 
@@ -774,8 +799,8 @@ pub fn run_queue(config: QueueConfig, horizon: f64, warmup: f64, seed: u64) -> Q
 pub fn run_queue_multi(
     config: QueueConfig,
     servers: usize,
-    horizon: f64,
-    warmup: f64,
+    horizon: Time<Seconds>,
+    warmup: Time<Seconds>,
     seed: u64,
 ) -> QueueMetrics {
     run_inner(config, servers, horizon, warmup, seed, false).0
@@ -791,8 +816,8 @@ pub fn run_queue_multi(
 pub fn run_queue_traced(
     config: QueueConfig,
     servers: usize,
-    horizon: f64,
-    warmup: f64,
+    horizon: Time<Seconds>,
+    warmup: Time<Seconds>,
     seed: u64,
 ) -> (QueueMetrics, Vec<JobRecord>) {
     run_inner(config, servers, horizon, warmup, seed, true)
@@ -801,17 +826,17 @@ pub fn run_queue_traced(
 fn run_inner(
     config: QueueConfig,
     servers: usize,
-    horizon: f64,
-    warmup: f64,
+    horizon: Time<Seconds>,
+    warmup: Time<Seconds>,
     seed: u64,
     traced: bool,
 ) -> (QueueMetrics, Vec<JobRecord>) {
     assert!(
-        horizon.is_finite() && horizon > 0.0,
+        horizon.raw().is_finite() && horizon.raw() > 0.0,
         "horizon must be finite and positive, got {horizon}"
     );
     assert!(
-        warmup.is_finite() && (0.0..horizon).contains(&warmup),
+        warmup.raw().is_finite() && (0.0..horizon.raw()).contains(&warmup.raw()),
         "warm-up must lie in [0, horizon), got {warmup} with horizon {horizon}"
     );
     let mut queue = SimQueue::with_servers(EntityId(0), config, warmup, servers);
@@ -821,7 +846,7 @@ fn run_inner(
     {
         let mut sim = Simulation::new(seed);
         let _id = sim.add_entity(&mut queue);
-        sim.run_until(Time::<Seconds>::from_raw(horizon));
+        sim.run_until(horizon);
         sim.finalize();
     }
     queue.finalize(horizon);

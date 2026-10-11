@@ -15,13 +15,14 @@
 //! process is interrupted:
 //!
 //! ```
+//! use tpt_des_core::{Seconds, Time};
 //! use tpt_des_process::hybrid::{ContinuousModel, HybridBridge};
 //! use tpt_des_process::{Interrupt, ProcessSystem};
 //!
 //! #[derive(Debug)]
 //! struct Tank { level: f64, rate: f64 }
 //! impl ContinuousModel for Tank {
-//!     fn integrate(&mut self, dt: f64) { self.level += self.rate * dt; }
+//!     fn integrate(&mut self, dt: Time<Seconds>) { self.level += self.rate * dt.raw(); }
 //!     fn guard(&self) -> f64 { self.level }
 //! }
 //!
@@ -30,22 +31,23 @@
 //! let filler = sys.spawn(|sim| async move {
 //!     sim.acquire(0, 1).await?;               // hold the valve
 //!     // Filling runs continuously; the guard interrupts us at 80%.
-//!     sim.delay(100.0).await.unwrap_err();     // never finishes the delay
+//!     sim.delay(Time::from_raw(100.0)).await.unwrap_err();     // never finishes the delay
 //!     sim.release(0, 1);
 //!     Ok(())
 //! });
 //!
-//! let mut bridge = HybridBridge::new(filler, 0.80, 1.0);
+//! let mut bridge = HybridBridge::new(filler, 0.80, Time::from_raw(1.0));
 //! bridge.attach(Tank { level: 0.0, rate: 0.1 });
-//! while !sys.is_finished(filler) && bridge.now() < 100.0 {
-//!     bridge.step(&sys, 0.1);                  // integrate 0.1s per step
+//! while !sys.is_finished(filler) && bridge.now().raw() < 100.0 {
+//!     bridge.step(&sys, Time::from_raw(0.1));                  // integrate 0.1s per step
 //!     sys.run_until(bridge.now());
 //! }
 //! // The guard fired near level 0.8, i.e. around t ≈ 8.
-//! assert!((bridge.now() - 8.0).abs() < 0.15);
+//! assert!((bridge.now().raw() - 8.0).abs() < 0.15);
 //! ```
 
 use crate::system::{ProcessId, ProcessSystem};
+use tpt_des_core::{Seconds, Time};
 
 /// A continuous model integrated between discrete events.
 ///
@@ -53,7 +55,7 @@ use crate::system::{ProcessId, ProcessSystem};
 /// it in fixed steps and watches the guard.
 pub trait ContinuousModel: 'static {
     /// Advance the continuous state by `dt` time units.
-    fn integrate(&mut self, dt: f64);
+    fn integrate(&mut self, dt: Time<Seconds>);
 
     /// The scalar guard value watched for threshold crossings.
     fn guard(&self) -> f64;
@@ -64,8 +66,8 @@ pub trait ContinuousModel: 'static {
 pub struct HybridBridge<M: ContinuousModel> {
     model: Option<M>,
     threshold: f64,
-    step: f64,
-    now: f64,
+    step: Time<Seconds>,
+    now: Time<Seconds>,
     last_guard: Option<f64>,
     target: ProcessId,
     fired: bool,
@@ -89,17 +91,18 @@ impl<M: ContinuousModel> HybridBridge<M> {
     /// # Panics
     ///
     /// If `threshold` is NaN, or `step` is not finite and positive.
-    pub fn new(target: ProcessId, threshold: f64, step: f64) -> Self {
+    pub fn new(target: ProcessId, threshold: f64, step: Time<Seconds>) -> Self {
         assert!(!threshold.is_nan(), "guard threshold must not be NaN");
         assert!(
-            step.is_finite() && step > 0.0,
-            "integration step must be finite and positive, got {step}"
+            step.raw() > 0.0,
+            "integration step must be finite and positive, got {}",
+            step.raw()
         );
         Self {
             model: None,
             threshold,
             step,
-            now: 0.0,
+            now: Time::ZERO,
             last_guard: None,
             target,
             fired: false,
@@ -113,7 +116,7 @@ impl<M: ContinuousModel> HybridBridge<M> {
     }
 
     /// Current continuous time.
-    pub fn now(&self) -> f64 {
+    pub fn now(&self) -> Time<Seconds> {
         self.now
     }
 
@@ -134,19 +137,20 @@ impl<M: ContinuousModel> HybridBridge<M> {
     ///
     /// If `dt` is NaN, infinite, or negative: integrating over such a span
     /// would silently skip the step or never terminate.
-    pub fn step(&mut self, system: &ProcessSystem, dt: f64) -> f64 {
+    pub fn step(&mut self, system: &ProcessSystem, dt: Time<Seconds>) -> Time<Seconds> {
         assert!(
-            dt.is_finite() && dt >= 0.0,
-            "step duration must be finite and non-negative, got {dt}"
+            dt.raw() >= 0.0,
+            "step duration must be non-negative, got {}",
+            dt.raw()
         );
         let Some(model) = self.model.as_mut() else {
             return self.now;
         };
-        let mut remaining = dt;
+        let mut remaining = dt.raw();
         while remaining > 0.0 {
-            let h = remaining.min(self.step);
-            model.integrate(h);
-            self.now += h;
+            let h = remaining.min(self.step.raw());
+            model.integrate(Time::from_raw(h));
+            self.now += Time::from_raw(h);
             remaining -= h;
             let guard = model.guard();
             if let Some(last) = self.last_guard {
@@ -177,8 +181,8 @@ mod tests {
     }
 
     impl ContinuousModel for Tank {
-        fn integrate(&mut self, dt: f64) {
-            self.level += self.rate * dt;
+        fn integrate(&mut self, dt: Time<Seconds>) {
+            self.level += self.rate * dt.raw();
         }
         fn guard(&self) -> f64 {
             self.level
@@ -192,25 +196,25 @@ mod tests {
         let filler = sys.spawn(|sim| async move {
             sim.acquire(0, 1).await?;
             // Will be interrupted long before t = 100.
-            assert!(sim.delay(100.0).await.is_err());
+            assert!(sim.delay(Time::from_raw(100.0)).await.is_err());
             sim.release(0, 1);
             Ok(())
         });
 
-        let mut bridge = HybridBridge::new(filler, 0.80, 1.0);
+        let mut bridge = HybridBridge::new(filler, 0.80, Time::from_raw(1.0));
         bridge.attach(Tank {
             level: 0.0,
             rate: 0.1,
         });
         let mut steps = 0;
-        while !sys.is_finished(filler) && bridge.now() < 100.0 && steps < 10_000 {
-            bridge.step(&sys, 0.1);
+        while !sys.is_finished(filler) && bridge.now().raw() < 100.0 && steps < 10_000 {
+            bridge.step(&sys, Time::from_raw(0.1));
             sys.set_time(bridge.now());
             sys.run_until(bridge.now());
             steps += 1;
         }
         assert!(bridge.fired());
-        assert!((bridge.now() - 8.0).abs() < 0.15);
+        assert!((bridge.now().raw() - 8.0).abs() < 0.15);
         assert!(sys.is_finished(filler));
         assert_eq!(sys.now(), bridge.now());
     }
@@ -219,16 +223,16 @@ mod tests {
     fn interruption_delivers_through_pending_delay() {
         let mut sys = ProcessSystem::new(3);
         let pid = sys.spawn(|sim| async move {
-            match sim.delay(10.0).await {
+            match sim.delay(Time::from_raw(10.0)).await {
                 Err(Interrupt) => Ok(()), // recovered
                 Ok(()) => Err(Interrupt), // would mean no interruption happened
             }
         });
         // The delay is pending after the first poll; interrupt it.
-        sys.run_until(1.0);
+        sys.run_until(Time::from_raw(1.0));
         sys.interrupt(pid);
         sys.run();
         assert!(sys.is_finished(pid));
-        assert!(sys.now() < 10.0);
+        assert!(sys.now().raw() < 10.0);
     }
 }

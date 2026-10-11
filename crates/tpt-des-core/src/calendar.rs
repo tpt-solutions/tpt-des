@@ -130,9 +130,9 @@ impl<E> Ord for HeapEntry<E> {
 
 /// An event popped from the calendar.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Popped<E> {
+pub struct Popped<Unit, E> {
     /// Time the event was scheduled for.
-    pub time: f64,
+    pub time: Time<Unit>,
     /// The event's (compile-time) priority.
     pub priority: u8,
     /// The cancellation handle (already consumed — the event has fired).
@@ -298,9 +298,9 @@ impl<Unit, E> EventCalendar<Unit, E> {
         }
     }
 
-    fn popped(entry: HeapEntry<E>) -> Popped<E> {
+    fn popped(entry: HeapEntry<E>) -> Popped<Unit, E> {
         Popped {
-            time: entry.time,
+            time: Time::from_raw(entry.time),
             priority: entry.priority,
             id: EventId::new(entry.slot, entry.gen),
             target: entry.target,
@@ -313,7 +313,7 @@ impl<Unit, E> EventCalendar<Unit, E> {
     /// The heap invariant (pops are non-decreasing in
     /// `(time, priority, seq)`) is proved for small schedules by the Kani
     /// harnesses in `tpt-des-verify`.
-    pub fn pop(&mut self) -> Option<Popped<E>> {
+    pub fn pop(&mut self) -> Option<Popped<Unit, E>> {
         while !self.heap.is_empty() {
             if let Some(live) = self.take_top() {
                 return Some(Self::popped(live));
@@ -327,24 +327,24 @@ impl<Unit, E> EventCalendar<Unit, E> {
     /// Discards tombstones that have surfaced at the top of the heap (and
     /// frees their slots, keeping [`live_len`](Self::live_len) consistent);
     /// amortized `O(log n)`.
-    pub fn next_time(&mut self) -> Option<f64> {
+    pub fn next_time(&mut self) -> Option<Time<Unit>> {
         loop {
             let top = self.heap.peek()?;
             if self.slots[top.slot as usize].state == SlotState::Cancelled {
                 let _ = self.take_top();
                 continue;
             }
-            return Some(top.time);
+            return Some(Time::from_raw(top.time));
         }
     }
 
     /// Like [`pop`](Self::pop), but never returns events scheduled after
-    /// `max_time` (raw units): the loop stops there, leaving the entry in the
+    /// `max_time`: the loop stops there, leaving the entry in the
     /// heap. Used by `Simulation::run_until` to bound a run in time.
-    pub fn pop_until(&mut self, max_time: f64) -> Option<Popped<E>> {
+    pub fn pop_until(&mut self, max_time: Time<Unit>) -> Option<Popped<Unit, E>> {
         loop {
             let top = self.heap.peek()?;
-            if top.time > max_time {
+            if top.time > max_time.raw() {
                 return None;
             }
             if let Some(live) = self.take_top() {
@@ -372,7 +372,7 @@ mod tests {
         let a = c.schedule_at::<0>(Time::from_raw(1.0), A, 1);
         c.schedule_at::<0>(Time::from_raw(2.0), A, 2);
         assert!(c.cancel(a));
-        assert_eq!(c.next_time(), Some(2.0));
+        assert_eq!(c.next_time(), Some(Time::from_raw(2.0)));
         assert_eq!(c.live_len(), 1); // used to underflow after next_time
         assert_eq!(c.pop().unwrap().payload, 2);
         assert!(c.is_empty());
@@ -384,10 +384,10 @@ mod tests {
         let mut c = cal();
         c.schedule_at::<0>(Time::from_raw(1.0), A, 1);
         c.schedule_at::<0>(Time::from_raw(5.0), A, 5);
-        assert_eq!(c.pop_until(2.0).unwrap().payload, 1);
-        assert!(c.pop_until(2.0).is_none());
+        assert_eq!(c.pop_until(Time::from_raw(2.0)).unwrap().payload, 1);
+        assert!(c.pop_until(Time::from_raw(2.0)).is_none());
         assert_eq!(c.live_len(), 1);
-        assert_eq!(c.pop_until(9.0).unwrap().payload, 5);
+        assert_eq!(c.pop_until(Time::from_raw(9.0)).unwrap().payload, 5);
     }
 
     #[test]

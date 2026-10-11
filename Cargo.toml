@@ -10,6 +10,8 @@ members = [
     "crates/tpt-des-stats",
     "crates/tpt-des-verify",
     "crates/tpt-des",
+    "crates/tpt-des-cli",
+    "crates/tpt-des-wasm",
 ]
 
 [workspace.package]
@@ -45,6 +47,8 @@ tpt-math-linalg-dense = { version = "0.1.0", default-features = false }
 
 # Dev / verification tooling.
 proptest = "1.5"
+# Optional data parallelism for tpt-des-queue (its `parallel` feature).
+rayon = "1.10"
 # Optional result serialization for tpt-des-queue (see its `serde` feature).
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 criterion = "0.5"

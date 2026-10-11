@@ -94,6 +94,8 @@ jobs:
       - run: cargo build -p tpt-des-core --no-default-features --target wasm32-unknown-unknown
       - run: cargo build -p tpt-des-core --no-default-features
       - run: cargo build -p tpt-des --no-default-features --features core
+      # The WebAssembly bindings and their playground page (playground/pkg is generated, not committed).
+      - run: cargo build -p tpt-des-wasm --target wasm32-unknown-unknown --release
 
   # Each umbrella feature set must build on its own. Catches a feature that
   # forgets its dependencies (for example, `petri` needs `markov`) or a
@@ -115,6 +117,7 @@ jobs:
           - "std markov"
           - "std stats"
           - "std queue stats"
+          - "std queue parallel"
           - "std petri markov"
           - "std verify"
     steps:

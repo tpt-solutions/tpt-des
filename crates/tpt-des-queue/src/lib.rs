@@ -24,6 +24,7 @@ pub mod multiclass;
 pub mod network;
 pub mod planning;
 pub mod sim;
+pub mod trace;
 
 pub use analytic::{erlang_b, erlang_c, mg1, mm1, mm1_pn, mmc, Mg1Result, Mm1Result, MmcResult};
 pub use error::QueueError;
@@ -34,3 +35,8 @@ pub use sim::{
     run_queue, run_queue_multi, run_queue_traced, trace_to_csv, Discipline, Exponential, JobRecord,
     QueueConfig, QueueEvent, QueueMetrics, RateSampler, SimQueue,
 };
+pub use trace::{trace_fingerprint, trace_to_chrome, trace_to_json};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_doctests {}

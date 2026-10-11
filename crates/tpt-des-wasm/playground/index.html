@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tpt-des playground</title>
+  <style>
+    :root { color-scheme: light dark; --gap: 16px; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: var(--gap); line-height: 1.4; }
+    h1 { font-size: 1.4rem; margin: 0 0 var(--gap); }
+    form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+    label { display: flex; flex-direction: column; font-size: 0.9rem; }
+    input { font: inherit; padding: 4px 6px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: var(--gap); }
+    button { font: inherit; padding: 6px 12px; cursor: pointer; }
+    pre { background: rgba(127, 127, 127, 0.12); padding: 12px; overflow-x: auto; border-radius: 6px; }
+    .note { font-size: 0.85rem; opacity: 0.75; }
+  </style>
+</head>
+<body>
+  <h1>tpt-des playground</h1>
+  <p class="note">Simulates a single station with exponential arrivals and service.
+    The numbers come from the Rust library compiled to WebAssembly.
+    Times are in whatever unit you choose; rates are per the same unit.</p>
+
+  <form id="params">
+    <label>Arrival rate λ <input name="lambda" type="number" step="any" value="0.8"></label>
+    <label>Service rate μ <input name="mu" type="number" step="any" value="1"></label>
+    <label>Servers c <input name="servers" type="number" min="1" step="1" value="1"></label>
+    <label>Horizon <input name="horizon" type="number" step="any" value="20000"></label>
+    <label>Warm-up <input name="warmup" type="number" step="any" value="2000"></label>
+    <label>Replications <input name="replications" type="number" min="2" step="1" value="5"></label>
+    <label>Seed <input name="seed" type="number" min="0" step="1" value="42"></label>
+    <label>Max mean wait (for sizing) <input name="max_wait" type="number" step="any" value="0.5"></label>
+  </form>
+
+  <div class="actions">
+    <button id="run">Run simulation</button>
+    <button id="validate">Validate against M/M/c</button>
+    <button id="size">Size servers</button>
+  </div>
+
+  <h2>Result</h2>
+  <pre id="out">Loading…</pre>
+
+  <script type="module">
+    import init, { run_queue_json, validate_mmc_json, size_json } from './pkg/tpt_des_wasm.js';
+
+    const form = document.getElementById('params');
+    const out = document.getElementById('out');
+    const num = (name) => Number(form.elements[name].value);
+
+    // Keep a bad value from throwing: the library returns {"error": ...} instead.
+    const show = (json) => {
+      let parsed;
+      try { parsed = JSON.parse(json); } catch (e) { parsed = { error: String(e) }; }
+      out.textContent = JSON.stringify(parsed, null, 2);
+    };
+
+    await init();
+    out.textContent = 'Ready. Choose an action.';
+
+    document.getElementById('run').addEventListener('click', () => show(run_queue_json(
+      num('lambda'), num('mu'), num('servers'), num('horizon'), num('warmup'),
+      num('replications'), num('seed'),
+    )));
+    document.getElementById('validate').addEventListener('click', () => show(validate_mmc_json(
+      num('lambda'), num('mu'), num('servers'), num('horizon'), num('warmup'),
+      num('replications'), num('seed'),
+    )));
+    document.getElementById('size').addEventListener('click', () => show(size_json(
+      num('lambda'), num('mu'), num('max_wait'),
+    )));
+  </script>
+</body>
+</html>

@@ -28,3 +28,7 @@ pub mod timeseries;
 pub mod warmup;
 
 pub use error::StatsError;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_doctests {}

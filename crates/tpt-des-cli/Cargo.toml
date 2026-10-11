@@ -1,0 +1,30 @@
+[package]
+name = "tpt-des-cli"
+description = "Command-line runner for tpt-des: simulate, validate, and size queues; solve queueing networks from TOML files"
+readme = "README.md"
+keywords = ["simulation", "queueing", "cli"]
+categories = ["simulation", "command-line-utilities"]
+publish = false
+
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "tpt-des"
+path = "src/main.rs"
+# The binary shares its name with the `tpt_des` library; its docs would collide.
+doc = false
+
+[dependencies]
+tpt-des-core = { workspace = true }
+tpt-des-queue = { workspace = true, features = ["std"] }
+serde = { workspace = true }
+toml = "0.8"
+
+[lints]
+workspace = true

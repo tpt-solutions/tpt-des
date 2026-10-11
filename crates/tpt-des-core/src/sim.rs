@@ -254,11 +254,11 @@ impl<'ent, Unit, E> Simulation<'ent, Unit, E> {
     pub fn run_until(&mut self, horizon: Time<Unit>) -> u64 {
         self.init();
         let before = self.stats.events_total;
-        let horizon_raw = horizon.raw();
-        while let Some(popped) = self.calendar.pop_until(horizon_raw) {
+
+        while let Some(popped) = self.calendar.pop_until(horizon) {
             self.dispatch(popped.time, popped.target, popped.payload);
         }
-        if horizon_raw.is_finite() && horizon > self.clock.now() {
+        if horizon.raw().is_finite() && horizon > self.clock.now() {
             self.clock.advance_to(horizon);
         }
         self.stats.events_total - before
@@ -274,8 +274,8 @@ impl<'ent, Unit, E> Simulation<'ent, Unit, E> {
         processed
     }
 
-    fn dispatch(&mut self, time_raw: f64, target: EntityId, payload: E) {
-        self.clock.advance_to(Time::from_raw(time_raw));
+    fn dispatch(&mut self, time: Time<Unit>, target: EntityId, payload: E) {
+        self.clock.advance_to(time);
         self.stats.events_total += 1;
         let Simulation {
             clock,

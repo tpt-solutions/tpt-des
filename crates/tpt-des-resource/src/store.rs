@@ -6,6 +6,7 @@
 //!   discrete-continuous models.
 
 use crate::error::ResourceError;
+use tpt_des_core::{Seconds, Time};
 
 /// A discrete container holding `i64` items.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,35 +134,43 @@ impl Buffer {
 
     /// Duration to pour `amount` at `rate` given the free space, or `None`
     /// if the rate is non-positive or the buffer can never absorb it.
-    pub fn pour_duration(&self, amount: f64, rate: f64) -> Option<f64> {
+    pub fn pour_duration(&self, amount: f64, rate: f64) -> Option<Time<Seconds>> {
         if rate <= 0.0 || rate.is_nan() || amount.is_nan() {
             return None;
         }
         let accepted = amount.min(self.capacity - self.level);
         if accepted <= 0.0 {
-            Some(0.0)
+            Some(Time::ZERO)
         } else {
-            Some(accepted / rate)
+            duration(accepted / rate)
         }
     }
 
     /// Duration to drain `amount` at `rate` given the current level.
-    pub fn drain_duration(&self, amount: f64, rate: f64) -> Option<f64> {
+    pub fn drain_duration(&self, amount: f64, rate: f64) -> Option<Time<Seconds>> {
         if rate <= 0.0 || rate.is_nan() || amount.is_nan() {
             return None;
         }
         let taken = amount.min(self.level);
         if taken <= 0.0 {
-            Some(0.0)
+            Some(Time::ZERO)
         } else {
-            Some(taken / rate)
+            duration(taken / rate)
         }
     }
+}
+
+/// A computed duration, or `None` if it overflows to infinity (a `Time` must
+/// be finite, and a buffer that cannot move the amount in finite time can
+/// report that as "no duration").
+fn duration(seconds: f64) -> Option<Time<Seconds>> {
+    seconds.is_finite().then(|| Time::from_raw(seconds))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tpt_des_core::Time;
 
     #[test]
     fn store_respects_capacity() {
@@ -193,10 +202,10 @@ mod tests {
     #[test]
     fn buffer_rate_durations() {
         let mut b = Buffer::new(10.0).unwrap();
-        assert_eq!(b.pour_duration(5.0, 2.0), Some(2.5));
+        assert_eq!(b.pour_duration(5.0, 2.0), Some(Time::from_raw(2.5)));
         assert_eq!(b.pour_duration(5.0, 0.0), None);
         b.pour(4.0);
-        assert_eq!(b.drain_duration(8.0, 2.0), Some(2.0)); // only 4 available
+        assert_eq!(b.drain_duration(8.0, 2.0), Some(Time::from_raw(2.0))); // only 4 available
         assert_eq!(b.drain_duration(1.0, -1.0), None);
     }
 }

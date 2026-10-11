@@ -5,6 +5,7 @@ use core::fmt;
 /// Errors returned by the analytical queuing formulas and the network
 /// solvers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum QueueError {
     /// A rate, load, or moment argument was negative, zero, or non-finite.
     InvalidParameter,

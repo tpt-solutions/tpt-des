@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use tpt_des_core::{Seconds, Time};
 use tpt_des_process::{Interrupt, ProcessSystem, Sim};
 
 /// Contended acquire: the waiter must be woken by `release` and complete.
@@ -16,7 +17,7 @@ fn contended_acquire_completes_after_release() {
     let d1 = done.clone();
     sys.spawn(|sim: Sim| async move {
         sim.acquire(0, 1).await?;
-        sim.delay(5.0).await?;
+        sim.delay(Time::from_raw(5.0)).await?;
         sim.release(0, 1);
         d1.set(d1.get() + 1);
         Ok(())
@@ -32,7 +33,7 @@ fn contended_acquire_completes_after_release() {
     sys.run();
     assert!(sys.is_finished(second), "contended waiter never completed");
     assert_eq!(done.get(), 2);
-    assert_eq!(sys.now(), 5.0);
+    assert_eq!(sys.now().raw(), 5.0);
 }
 
 /// FIFO: with capacity 2 and three single-unit waiters, the head goes first
@@ -47,7 +48,7 @@ fn contended_acquire_fifo_with_multiple_units() {
         sys.spawn(move |sim: Sim| async move {
             sim.acquire(0, 1).await?;
             order.borrow_mut().push(id);
-            sim.delay(1.0 + id as f64).await?;
+            sim.delay(Time::from_raw(1.0 + id as f64)).await?;
             sim.release(0, 1);
             Ok(())
         });
@@ -69,7 +70,7 @@ fn notify_all_predicate_can_read_sim_state() {
     });
     let handle = sys.handle();
     sys.spawn(move |sim: Sim| async move {
-        sim.delay(2.0).await?;
+        sim.delay(Time::from_raw(2.0)).await?;
         // Make the condition true, then notify.
         sim.release(0, 1);
         sim.notify_all();
@@ -77,7 +78,7 @@ fn notify_all_predicate_can_read_sim_state() {
     });
     sys.run();
     assert!(handle.is_finished(waiter));
-    assert_eq!(sys.now(), 2.0);
+    assert_eq!(sys.now().raw(), 2.0);
 }
 
 /// `wait_until` evaluates its predicate at registration: an already-true
@@ -91,7 +92,7 @@ fn wait_until_true_at_registration_does_not_block() {
     });
     sys.run();
     assert!(sys.is_finished(pid));
-    assert_eq!(sys.now(), 0.0);
+    assert_eq!(sys.now().raw(), 0.0);
 }
 
 /// Interrupting a process blocked in `acquire` must not leave it queued:
@@ -102,7 +103,7 @@ fn interrupt_pending_acquire_unblocks_next_waiter() {
     sys.add_resource(0, 1);
     sys.spawn(|sim: Sim| async move {
         sim.acquire(0, 1).await?;
-        sim.delay(100.0).await?;
+        sim.delay(Time::from_raw(100.0)).await?;
         sim.release(0, 1);
         Ok(())
     });
@@ -121,9 +122,9 @@ fn interrupt_pending_acquire_unblocks_next_waiter() {
         sim.release(0, 1);
         Ok(())
     });
-    sys.run_until(1.0);
+    sys.run_until(Time::from_raw(1.0));
     sys.interrupt(victim);
-    sys.run_until(2.0);
+    sys.run_until(Time::from_raw(2.0));
     assert!(sys.is_finished(victim));
     // The first holder still holds the unit, so `next` waits for it. Once
     // the holder releases at t = 100 the waiter proceeds.
@@ -153,9 +154,9 @@ fn interrupt_wait_until_keeps_condition_for_others() {
         sim.wait_until(move |_| f.get()).await?;
         Ok(())
     });
-    sys.run_until(0.5);
+    sys.run_until(Time::from_raw(0.5));
     sys.interrupt(victim);
-    sys.run_until(0.5);
+    sys.run_until(Time::from_raw(0.5));
     assert!(sys.is_finished(victim));
     assert!(!sys.is_finished(other));
 
@@ -176,7 +177,7 @@ fn self_interrupt_is_delivered() {
     let pid = sys.spawn(move |sim: Sim| async move {
         let me = pc.get().expect("pid recorded before first resume");
         sim.interrupt(me);
-        match sim.delay(10.0).await {
+        match sim.delay(Time::from_raw(10.0)).await {
             Err(Interrupt) => Ok(()),
             Ok(()) => Err(Interrupt),
         }
@@ -184,7 +185,7 @@ fn self_interrupt_is_delivered() {
     pid_cell.set(Some(pid));
     sys.run();
     assert!(sys.is_finished(pid));
-    assert_eq!(sys.now(), 0.0);
+    assert_eq!(sys.now().raw(), 0.0);
 }
 
 /// Releasing more than was taken must not create units beyond capacity.
@@ -202,18 +203,18 @@ fn release_is_clamped_to_capacity() {
 fn negative_delay_is_rejected() {
     let mut sys = ProcessSystem::new(9);
     sys.spawn(|sim: Sim| async move {
-        let _ = sim.delay(-1.0).await;
+        let _ = sim.delay(Time::from_raw(-1.0)).await;
         Ok(())
     });
     sys.run();
 }
 
 #[test]
-#[should_panic(expected = "non-negative")]
-fn nan_delay_is_rejected() {
+#[should_panic(expected = "simulation time must be finite")]
+fn nan_delay_is_rejected_at_construction() {
     let mut sys = ProcessSystem::new(9);
     sys.spawn(|sim: Sim| async move {
-        let _ = sim.delay(f64::NAN).await;
+        let _ = sim.delay(Time::from_raw(f64::NAN)).await;
         Ok(())
     });
     sys.run();
@@ -236,25 +237,25 @@ fn acquire_beyond_capacity_is_rejected() {
 fn blocking_op_outside_process_has_clear_message() {
     let sys = ProcessSystem::new(11);
     let handle = sys.handle();
-    drop(handle.delay(1.0));
+    drop(handle.delay(Time::from_raw(1.0)));
 }
 
 #[test]
-#[should_panic(expected = "step duration must be finite")]
+#[should_panic(expected = "simulation time must be finite")]
 fn hybrid_step_rejects_nan_duration() {
     use tpt_des_process::hybrid::{ContinuousModel, HybridBridge};
     struct Flat;
     impl ContinuousModel for Flat {
-        fn integrate(&mut self, _dt: f64) {}
+        fn integrate(&mut self, _dt: Time<Seconds>) {}
         fn guard(&self) -> f64 {
             0.0
         }
     }
     let sys = ProcessSystem::new(12);
     let pid = sys.spawn(|_sim: Sim| async move { Ok(()) });
-    let mut bridge = HybridBridge::new(pid, 1.0, 0.1);
+    let mut bridge = HybridBridge::new(pid, 1.0, Time::from_raw(0.1));
     bridge.attach(Flat);
-    bridge.step(&sys, f64::NAN);
+    bridge.step(&sys, Time::from_raw(f64::NAN));
 }
 
 /// A process spawned at t = 0.5 must run at t = 0.5. The executor used to
@@ -270,10 +271,10 @@ fn spawned_process_runs_before_clock_advances() {
     let s = starts.clone();
     sys.spawn(move |sim: Sim| async move {
         for _ in 0..3 {
-            sim.delay(0.5).await?;
+            sim.delay(Time::from_raw(0.5)).await?;
             let s = s.clone();
             sim.spawn(move |sim: Sim| async move {
-                s.borrow_mut().push(sim.now());
+                s.borrow_mut().push(sim.now().raw());
                 Ok(())
             });
         }

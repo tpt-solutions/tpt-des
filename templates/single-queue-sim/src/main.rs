@@ -2,6 +2,7 @@
 //! the M/M/1 formula. Edit the rates and the replication count, then run
 //! `cargo run --release`.
 
+use tpt_des::kernel::Time;
 use tpt_des::queue::{mm1, run_queue, Discipline, Exponential, QueueConfig};
 use tpt_des::stats::ci::mean_of_samples_ci;
 
@@ -21,7 +22,7 @@ fn main() {
                 capacity: None,
                 priority: None,
             };
-            run_queue(config, HORIZON, WARMUP, seed).mean_sojourn()
+            run_queue(config, Time::from_raw(HORIZON), Time::from_raw(WARMUP), seed).mean_sojourn().raw()
         })
         .collect();
 

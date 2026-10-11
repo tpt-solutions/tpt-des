@@ -46,7 +46,7 @@ proptest! {
         let mut last = (0.0f64, 0u8, 0u64);
         let mut fired = 0usize;
         while let Some(ev) = cal.pop() {
-            let key = (ev.time, ev.priority, ev.id.raw());
+            let key = (ev.time.raw(), ev.priority, ev.id.raw());
             prop_assert!(key >= last, "pop order violated: {:?} after {:?}", key, last);
             // The stored priority is the one the event was scheduled with.
             prop_assert_eq!(usize::from(ev.priority), ev.payload);

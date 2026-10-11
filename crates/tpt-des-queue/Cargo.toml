@@ -21,6 +21,7 @@ tpt-math-prob-sampler = { workspace = true }
 tpt-math-linalg-dense = { workspace = true }
 tpt-des-stats = { workspace = true, default-features = true }
 serde = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 tpt-des-verify = { workspace = true }
@@ -29,7 +30,10 @@ proptest = { workspace = true }
 [features]
 default = ["std"]
 std = ["alloc", "tpt-des-core/std", "tpt-math-prob-core/std", "tpt-math-prob-dist/std", "tpt-math-prob-sampler/std", "tpt-math-linalg-dense/std"]
-serde = ["dep:serde"]
+serde = ["dep:serde", "tpt-des-core/serde"]
+# Run validation replications on a thread pool. Needs std. Results are identical
+# to the serial run: each replication keeps its own seed and order is preserved.
+parallel = ["std", "dep:rayon"]
 alloc = ["tpt-des-core/alloc", "tpt-math-prob-core/alloc", "tpt-math-prob-dist/alloc", "tpt-math-prob-sampler/alloc", "tpt-math-linalg-dense/alloc"]
 
 [lints]

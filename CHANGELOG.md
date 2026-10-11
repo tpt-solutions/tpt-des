@@ -9,6 +9,71 @@ and versions adhere to [Semantic Versioning](https://semver.org).
 Correctness fixes from the 2026-10-11 review (todo.md Phase 6). Each fix has
 a regression test. **Several changes are breaking** and are listed first.
 
+### Documentation
+
+- Every crate has its own `README.md` (usage, module map, feature flags, limits)
+  and `CHANGELOG.md`, which is split from this file.
+- The README examples of the library crates are compiled and tested as doctests.
+- `CONTRIBUTING.md` says contributions are taken as issues only.
+
+### Pre-release batch (typed time, new crates, export formats)
+
+Breaking:
+- **Typed time.** Times and durations in public APIs are `Time<Seconds>`. Rates
+  and dimensionless values stay `f64`, documented as "per time unit".
+  - `tpt-des-core`: `EventCalendar::pop_until` and `next_time` take or return
+    `Time<Unit>`. `Popped` is now `Popped<Unit, E>` with a `Time<Unit>` `time`.
+    `Time` gains `AddAssign`, `Div<f64>`, `Sum`, `Display`, and (feature `serde`)
+    `Serialize`.
+  - `tpt-des-queue`: `run_queue`, `run_queue_multi`, `run_queue_traced`,
+    `SimQueue::with_warmup`, `with_servers`, and `finalize` take `Time<Seconds>`.
+    `RateSampler::draw` and `FromClosure` return `Time<Seconds>`.
+    `QueueMetrics::{total_wait, total_sojourn, last_t, reset_at}`,
+    `ClassWait::total_wait`, `JobRecord` times, and `mean_wait`, `mean_sojourn`,
+    `mean_wait_for_priority`, `JobRecord::wait` and `sojourn` return or take
+    `Time<Seconds>`. `size_for_mean_wait`, `validate_mmc`, and
+    `mean_wait_to_precision` take typed horizons, warm-ups, and targets.
+  - `tpt-des-process`: `Sim::now`, `Sim::set_time`, `Sim::delay`,
+    `ProcessSystem::now`, `set_time`, and `run_until` are typed. Bridge types
+    use `Time<Seconds>` too. `ContinuousModel::integrate(dt)` takes
+    `Time<Seconds>`, so implementers must change.
+  - `tpt-des-petri`: `StochasticPetriNet::simulate(horizon)`, `SpnRun::horizon`,
+    and `SpnRun::occupancy` durations are `Time<Seconds>`.
+  - `tpt-des-resource`: `Buffer::pour_duration` and `drain_duration` return
+    `Option<Time<Seconds>>`, and return `None` when the result overflows.
+  - `tpt-des-stats`: `TimeWeightedAvg::push(t, v)` and `window()` use
+    `Time<Seconds>`. `tpt-des-core` is now a normal dependency of this crate.
+- A non-finite time cannot be built as a `Time`, so it panics at construction.
+  Earlier, NaN horizons returned errors (or panicked with a different message).
+  `SpnError::InvalidHorizon` now covers negative horizons only.
+- **`#[non_exhaustive]`** on the error enums (`QueueError`, `ReachabilityError`,
+  `SpnError`, `MarkovError`, `StatsError`, `ResourceError`) and on the result
+  and report structs in `tpt-des-queue` (`QueueMetrics`, `ClassWait`,
+  `JobRecord`, `Mm1Result`, `MmcResult`, `Mg1Result`, `MvaResult`,
+  `MultiClassResult`, `Sizing`, `Estimate`, `ValidationRow`,
+  `ValidationReport`, `PrecisionRun`). Matches on these need a wildcard arm.
+- `tpt_des::core` was renamed to `tpt_des::kernel` in the earlier batch; the
+  umbrella's `parallel` feature is new.
+- The WebAssembly seed argument is `u32`, so JavaScript passes a plain number.
+
+Added:
+- `tpt-des-queue`: `parallel` feature (rayon). `validate_mmc` runs its
+  replications on a pool. Results are identical to the serial run, because each
+  replication keeps its seed and the order is preserved. `mean_wait_to_precision`
+  stays serial, because its stopping rule depends on the order of replications.
+- `tpt-des-queue::trace`: `trace_to_json`, `trace_to_chrome` (Chrome Trace Event
+  format, with one lane per concurrent service), and `trace_fingerprint` (a
+  64-bit replay check over the seed and the records).
+- `crates/tpt-des-cli` (unpublished): binary `tpt-des` with `run`, `validate`,
+  `size`, and `network` commands, driven by TOML files. Unknown keys are errors.
+- `crates/tpt-des-wasm` (unpublished): WebAssembly bindings (`run_queue_json`,
+  `validate_mmc_json`, `size_json`) and a static playground in
+  `playground/`. The bindings were exercised in Node, and the page was not run
+  in a browser.
+- CI: `cargo build` for the WebAssembly crate, and the feature matrix includes
+  `std queue parallel`.
+- README badges for CI, MSRV, and license.
+
 ### Review follow-ups, Phases 7 to 10 (this batch)
 
 Added:

@@ -4,6 +4,7 @@ use core::fmt;
 
 /// Errors returned by resource primitives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ResourceError {
     /// A capacity or amount argument was zero, negative, or non-finite.
     InvalidParameter,

@@ -38,6 +38,8 @@ petri = ["dep:tpt-des-petri", "core", "markov"]
 markov = ["dep:tpt-des-markov"]
 stats = ["dep:tpt-des-stats"]
 verify = ["dep:tpt-des-verify", "core", "queue", "resource", "petri", "markov", "stats", "std"]
+# Parallel validation and replications (rayon), via tpt-des-queue.
+parallel = ["queue", "std", "tpt-des-queue?/parallel"]
 # no_std subset: default-features = false, features = ["core"].
 # Only `core` is no_std-capable. Every other feature needs `std` (the queue,
 # resource, petri, markov, and stats numerics depend on crates that require

@@ -1,82 +1,44 @@
 # Contributing to tpt-des
 
-Thanks for considering a contribution. This guide covers how to build and test
-the workspace, what a change needs before it is ready, and how the project
-tracks its work.
+Contributions to tpt-des are made through **issues only**. Please do not open
+pull requests. Report bugs, ask questions, and suggest features by opening an
+issue on the [GitHub issue tracker](https://github.com/tpt-solutions/tpt-des/issues).
 
-## Getting set up
+Maintainers will decide what to change and how. An issue that reproduces a bug
+or describes a clear use case is the most useful kind of report.
 
-The toolchain is pinned in `rust-toolchain.toml` (stable, with `rustfmt` and
-`clippy`). The minimum supported Rust version is 1.84, set as `rust-version`
-in the workspace `Cargo.toml`.
+## Reporting a bug
 
-```sh
-cargo build --workspace
-cargo test --workspace
-```
+Include:
 
-The `justfile` wraps the common checks:
+1. The crate and version (for example, `tpt-des-queue 0.1.0`), and whether you
+   use the `tpt-des` umbrella or a member crate directly.
+2. The Rust toolchain (`rustc --version`) and your operating system.
+3. The features you enabled.
+4. A minimal program or model file that shows the problem, and what you expected
+   to happen instead.
+5. Whether the problem appears in debug builds, release builds, or both. Some
+   bugs only appear in one of them.
 
-| Recipe       | What it runs                                              |
-|--------------|-----------------------------------------------------------|
-| `just fmt`   | `cargo fmt --all --check`                                 |
-| `just clippy`| clippy over all targets, warnings denied                  |
-| `just test`  | the workspace test suite                                  |
-| `just deny`  | `cargo deny check` (licenses, advisories, bans, sources)  |
-| `just no-std`| the `no_std` build of `tpt-des-core`                      |
-| `just kani`  | Kani bounded model checks (needs `cargo kani` installed)  |
+If a result looks wrong against a closed-form value, include the formula you
+compared with and its inputs.
 
-Run `just` with no arguments to list them.
+## Suggesting a feature
 
-## What a change needs
+Describe the modelling problem you are trying to solve before describing the
+API you would like. Say which crate the feature belongs in, if you know.
 
-Before opening a pull request, check that:
-
-1. **Formatting and lints pass.** `cargo fmt --all` and
-   `cargo clippy --workspace --all-targets -- -D warnings`.
-2. **Tests pass in debug and release.** Some bugs only appear in release
-   builds, where `debug_assert!` is compiled out. Run
-   `cargo test --workspace` and `cargo test --workspace --release`.
-3. **Bug fixes come with a regression test** that fails on the old code. Where
-   the old behaviour cannot be reached through the public API, say so in the
-   pull request.
-4. **Docs build cleanly.** `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`.
-5. **`CHANGELOG.md` is updated** under `[Unreleased]` for user-visible changes.
-   Mark breaking changes under **Breaking**.
-6. **`todo.md` is updated** if the change closes or changes a tracked item.
-
-## Scope and style
-
-- **Correctness first.** Numerical routines are checked against closed-form
-  results (Erlang, Kleinrock, Kac, gambler's ruin) wherever one exists.
-  Simulation tests compare against those results with a stated tolerance.
-- **No new dependencies without discussion.** The event calendar and the
-  statistical numerics (Student-t, incomplete beta, erfc) are implemented in
-  this workspace. Linear algebra and probability sampling come from the
-  published `tpt-math` crates. `cargo deny` enforces the license and source
-  policy in `deny.toml`.
-- **Match the surrounding code.** Use the existing naming, comment density,
-  and error-handling patterns in the crate you are editing. Public functions
-  that can fail return `Result` with a crate error type. Math helpers that
-  are only defined on part of their domain return `NaN` outside it, and say
-  so in their docs.
-- **Determinism.** Simulations are seeded and must replay bit-for-bit. Do not
-  introduce wall-clock time, hash-map iteration order, or unseeded randomness
-  into simulation paths.
-
-## Project tracking
-
-`todo.md` is the phased build tracker. Phase 6 holds correctness fixes from
-the 2026-10-11 review; Phases 7 to 10 cover CI hygiene, performance,
-adoption material, and proposed features. Phase 10 items need confirmation
-before they are built, so please open an issue before starting one.
-
-## Reporting security issues
+## Security issues
 
 Please do not file public issues for security vulnerabilities. See
 [SECURITY.md](SECURITY.md).
 
+## Project tracking
+
+The maintainers track work in `todo.md`. Issues are linked to its phases where
+they apply, so reference the phase if you can.
+
 ## Licensing
 
-tpt-des is dual-licensed under MIT OR Apache-2.0. By contributing, you agree
-that your contribution is licensed under the same terms.
+tpt-des is dual-licensed under MIT OR Apache-2.0. By filing an issue, you agree
+that any text or code you include in it may be used under the same terms.

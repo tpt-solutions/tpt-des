@@ -9,6 +9,7 @@ use crate::error::QueueError;
 /// Results for an M/M/1 queue.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct Mm1Result {
     /// Utilization `ρ = λ/μ`.
     pub rho: f64,
@@ -70,6 +71,7 @@ pub fn mm1_pn(lambda: f64, mu: f64, n: u32) -> Result<f64, QueueError> {
 /// Results for an M/M/c queue with `c` identical servers.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct MmcResult {
     /// Per-server utilization `ρ = a/c` with offered load `a = λ/μ`.
     pub rho: f64,
@@ -132,6 +134,7 @@ pub fn mmc(lambda: f64, mu: f64, c: u32) -> Result<MmcResult, QueueError> {
 /// Results for an M/G/1 queue (Pollaczek–Khinchine).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct Mg1Result {
     /// Utilization `ρ = λ·E[S]`.
     pub rho: f64,

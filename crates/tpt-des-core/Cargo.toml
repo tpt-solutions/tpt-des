@@ -15,6 +15,7 @@ homepage.workspace = true
 
 [dependencies]
 tpt-math-prob-core = { workspace = true }
+serde = { workspace = true, optional = true }
 
 [features]
 default = ["std"]
@@ -22,6 +23,8 @@ default = ["std"]
 std = ["alloc", "tpt-math-prob-core/std"]
 # Dynamic dispatch, maps and the event heap always need an allocator.
 alloc = ["tpt-math-prob-core/alloc"]
+# Serialize `Time<Unit>` as its raw f64 value.
+serde = ["dep:serde"]
 
 [dev-dependencies]
 criterion = { workspace = true }

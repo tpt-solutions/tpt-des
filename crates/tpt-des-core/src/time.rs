@@ -18,8 +18,10 @@
 //! values in debug builds; every arithmetic operation preserves finiteness
 //! invariants, which keeps the event calendar's ordering well defined.
 
+use core::fmt;
+use core::iter::Sum;
 use core::marker::PhantomData;
-use core::ops::{Add, Mul, Sub};
+use core::ops::{Add, AddAssign, Div, Mul, Sub};
 
 /// Marker type for simulation ticks — the abstract, dimensionless time unit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -153,6 +155,31 @@ impl<Unit> Mul<f64> for Time<Unit> {
     }
 }
 
+impl<Unit> AddAssign for Time<Unit> {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl<Unit> Div<f64> for Time<Unit> {
+    type Output = Self;
+    fn div(self, rhs: f64) -> Self {
+        Self::from_raw(self.raw / rhs)
+    }
+}
+
+impl<Unit> Sum for Time<Unit> {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::ZERO, |acc, t| acc + t)
+    }
+}
+
+impl<Unit> fmt::Display for Time<Unit> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.raw, f)
+    }
+}
+
 impl Time<Seconds> {
     /// Convert a duration in hours to seconds.
     pub fn from_hours(hours: f64) -> Self {
@@ -174,6 +201,13 @@ impl Time<Hours> {
     /// Convert this duration to seconds.
     pub fn to_seconds(self) -> Time<Seconds> {
         Time::from_raw(self.raw * SECONDS_PER_HOUR)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<Unit> serde::Serialize for Time<Unit> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_f64(self.raw)
     }
 }
 

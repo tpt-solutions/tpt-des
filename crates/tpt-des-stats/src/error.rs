@@ -4,6 +4,7 @@ use core::fmt;
 
 /// Why a statistical estimator refused its input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StatsError {
     /// The confidence level must lie strictly inside `(0, 1)`.
     InvalidConfidence,

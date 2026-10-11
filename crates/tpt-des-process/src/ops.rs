@@ -58,7 +58,7 @@ impl Delay {
             duration >= 0.0,
             "delay duration must be a non-negative number, got {duration}"
         );
-        let deadline = sim.now() + duration;
+        let deadline = sim.now().raw() + duration;
         Self {
             sim,
             pid,
