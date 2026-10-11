@@ -61,10 +61,12 @@ impl<Unit> SimClock<Unit> {
 
     /// Advance the clock to `t`.
     ///
-    /// Panics in debug builds if `t` is earlier than the current time —
+    /// # Panics
+    ///
+    /// In all build profiles, if `t` is earlier than the current time:
     /// simulation time must never move backwards.
     pub fn advance_to(&mut self, t: Time<Unit>) {
-        debug_assert!(
+        assert!(
             t >= self.now,
             "simulation time moved backwards: {:?} < {:?}",
             t.raw(),
@@ -85,6 +87,10 @@ impl<Unit> Default for SimClock<Unit> {
 pub struct RunStats {
     /// Cumulative events dispatched since the simulation was created.
     pub events_total: u64,
+    /// Events whose target [`EntityId`] was never registered. They are
+    /// dropped rather than dispatched; a non-zero count almost always means a
+    /// modelling bug (a stale or foreign id), so check it after a run.
+    pub dropped_events: u64,
 }
 
 /// A discrete event simulation over entities of one payload type `E`.
@@ -241,12 +247,19 @@ impl<'ent, Unit, E> Simulation<'ent, Unit, E> {
 
     /// Run until `horizon` (events scheduled exactly at the horizon do
     /// fire). Returns the number of events processed by this call.
+    ///
+    /// On return the clock reads `horizon` (when it is finite and later than
+    /// the last event), so [`now`](Self::now) reports the end of the window
+    /// rather than the time of the last event before it.
     pub fn run_until(&mut self, horizon: Time<Unit>) -> u64 {
         self.init();
         let before = self.stats.events_total;
         let horizon_raw = horizon.raw();
         while let Some(popped) = self.calendar.pop_until(horizon_raw) {
             self.dispatch(popped.time, popped.target, popped.payload);
+        }
+        if horizon_raw.is_finite() && horizon > self.clock.now() {
+            self.clock.advance_to(horizon);
         }
         self.stats.events_total - before
     }
@@ -278,8 +291,9 @@ impl<'ent, Unit, E> Simulation<'ent, Unit, E> {
             calendar,
             rng,
         };
-        if let Some(entity) = entities.get_mut(target.raw()) {
-            entity.on_event(payload, &mut ctx);
+        match entities.get_mut(target.raw()) {
+            Some(entity) => entity.on_event(payload, &mut ctx),
+            None => self.stats.dropped_events += 1,
         }
     }
 }

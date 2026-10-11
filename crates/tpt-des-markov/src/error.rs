@@ -21,6 +21,12 @@ pub enum MarkovError {
     NoAbsorption,
     /// A linear solve or power iteration failed to converge.
     NotConvergent,
+    /// The linear system has no unique solution: the chain is reducible
+    /// (for stationary distributions) or the target set is not reached with
+    /// probability one (for absorption and first-passage times).
+    Singular,
+    /// The tolerance is NaN or negative.
+    InvalidTolerance,
 }
 
 impl fmt::Display for MarkovError {
@@ -33,6 +39,8 @@ impl fmt::Display for MarkovError {
             MarkovError::Empty => write!(f, "chain must have at least one state"),
             MarkovError::NoAbsorption => write!(f, "no reachable absorbing state"),
             MarkovError::NotConvergent => write!(f, "solver did not converge"),
+            MarkovError::Singular => write!(f, "linear system is singular (no unique solution)"),
+            MarkovError::InvalidTolerance => write!(f, "tolerance must be a non-negative number"),
         }
     }
 }

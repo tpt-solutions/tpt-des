@@ -84,18 +84,91 @@ fn null_space(matrix: &[Vec<f64>], cols: usize) -> Vec<Vec<f64>> {
     basis
 }
 
-/// Basis of the P-invariants: solutions of `xᵀC = 0`, i.e. the null space
-/// of `Cᵀ` (transitions × places). Empty if the net conserves nothing
-/// nontrivially.
+/// Non-negative minimal P-invariants, by the Farkas (Martínez–Silva)
+/// algorithm: solutions `x ≥ 0` of `xᵀC = 0` with minimal support.
+///
+/// Each row carries its incidence part (`C` row, eliminated transition by
+/// transition) alongside an identity part (the place weights). Combining a
+/// positive and a negative entry in one transition column cancels it; rows
+/// that survive all eliminations are exactly the non-negative invariants,
+/// and only minimal supports are kept. Empty if the net conserves nothing.
 pub fn place_invariants(net: &PetriNet) -> Vec<Vec<f64>> {
     let c = net.incidence();
     let places = net.places();
     let transitions = net.transitions();
-    // Cᵀ: transitions rows, places columns.
-    let ct: Vec<Vec<f64>> = (0..transitions)
-        .map(|t| (0..places).map(|p| c[p][t] as f64).collect())
+
+    // (incidence part over transitions, identity part over places)
+    let mut rows: Vec<(Vec<i64>, Vec<i64>)> = (0..places)
+        .map(|p| {
+            let mut identity = vec![0i64; places];
+            identity[p] = 1;
+            (c[p].clone(), identity)
+        })
         .collect();
-    null_space(&ct, places)
+
+    for t in 0..transitions {
+        let (mut next, rest): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| r.0[t] == 0);
+        let pos: Vec<_> = rest.iter().filter(|r| r.0[t] > 0).cloned().collect();
+        let neg: Vec<_> = rest.iter().filter(|r| r.0[t] < 0).cloned().collect();
+        for p_row in &pos {
+            for n_row in &neg {
+                let a = -n_row.0[t];
+                let b = p_row.0[t];
+                let mut inc: Vec<i64> = (0..transitions)
+                    .map(|k| a * p_row.0[k] + b * n_row.0[k])
+                    .collect();
+                let mut ident: Vec<i64> = (0..places)
+                    .map(|k| a * p_row.1[k] + b * n_row.1[k])
+                    .collect();
+                let g = inc
+                    .iter()
+                    .chain(ident.iter())
+                    .fold(0, |g, &v| gcd(g, v.abs()));
+                if g > 1 {
+                    inc.iter_mut().for_each(|v| *v /= g);
+                    ident.iter_mut().for_each(|v| *v /= g);
+                }
+                next.push((inc, ident));
+            }
+        }
+        next.sort();
+        next.dedup();
+        rows = next;
+    }
+
+    // Every surviving row has a zero incidence part: its identity part is a
+    // non-negative P-invariant.
+    let mut candidates: Vec<Vec<i64>> = rows.into_iter().map(|(_, ident)| ident).collect();
+    candidates.sort();
+    candidates.dedup();
+    let supports: Vec<Vec<bool>> = candidates
+        .iter()
+        .map(|v| v.iter().map(|&x| x != 0).collect())
+        .collect();
+    // Keep minimal supports only: drop any invariant whose support strictly
+    // contains another's.
+    let minimal: Vec<Vec<f64>> = (0..candidates.len())
+        .filter(|&i| {
+            !(0..candidates.len()).any(|j| {
+                j != i
+                    && supports[j]
+                        .iter()
+                        .zip(&supports[i])
+                        .all(|(&sj, &si)| !sj || si)
+                    && supports[j] != supports[i]
+            })
+        })
+        .map(|i| candidates[i].iter().map(|&x| x as f64).collect())
+        .collect();
+    minimal
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
 }
 
 /// Basis of the T-invariants: solutions of `Cy = 0` — the null space of the

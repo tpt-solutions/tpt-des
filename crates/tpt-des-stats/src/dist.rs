@@ -19,7 +19,10 @@ pub fn ln_gamma(x: f64) -> f64 {
         9.984_369_578_019_576_2e-6,
         1.505_632_735_149_311_6e-7,
     ];
-    assert!(x > 0.0, "ln_gamma requires x > 0");
+    // Γ has no finite log for x ≤ 0 (and NaN is outside the domain too).
+    if x.is_nan() || x <= 0.0 {
+        return f64::NAN;
+    }
     if x < 0.5 {
         // Reflection: Γ(x)Γ(1−x) = π/sin(πx)
         core::f64::consts::PI.ln() - (core::f64::consts::PI * x).sin().ln() - ln_gamma(1.0 - x)
@@ -125,7 +128,9 @@ pub fn student_t_cdf(t: f64, df: f64) -> f64 {
 /// ~1e-10 accurate after ~110 iterations over a wide bracket.
 #[must_use]
 pub fn student_t_ppf(p: f64, df: f64) -> f64 {
-    assert!((0.0..=1.0).contains(&p), "quantile probability in [0, 1]");
+    if !(0.0..=1.0).contains(&p) || df.is_nan() || df <= 0.0 {
+        return f64::NAN;
+    }
     if p == 0.0 {
         return f64::NEG_INFINITY;
     }
@@ -147,28 +152,63 @@ pub fn student_t_ppf(p: f64, df: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
-/// Standard normal CDF (Abramowitz–Stegun 7.1.26 erf, |ε| < 1.5e-7).
+/// Standard normal CDF `Φ(x)`.
+///
+/// Computed through `erfc` (private), so the lower tail keeps relative accuracy
+/// (`Φ(−5) ≈ 2.8665e-7` is correct to many digits, where the previous
+/// Abramowitz–Stegun 7.1.26 approximation was only good to about 1.5e-7
+/// absolute).
 #[must_use]
 pub fn normal_cdf(x: f64) -> f64 {
-    0.5 * (1.0 + erf(x / core::f64::consts::SQRT_2))
+    0.5 * erfc(-x / core::f64::consts::SQRT_2)
 }
 
-fn erf(x: f64) -> f64 {
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let ax = x.abs();
-    // A&S 7.1.26: erf(x) ≈ 1 − (a₁t + … + a₅t⁵)·exp(−x²), t = 1/(1+px)
-    let t = 1.0 / (1.0 + 0.327_591_1 * ax);
-    let poly = t
-        * (0.254_829_592
-            + t * (-0.284_496_736
-                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
-    sign * (1.0 - poly * (-ax * ax).exp())
+/// Complementary error function. A Taylor series covers `|x| < 3`; beyond
+/// that the Laplace continued fraction (evaluated backwards) converges
+/// quickly and keeps the tail accurate.
+fn erfc(x: f64) -> f64 {
+    if x < 0.0 {
+        return 2.0 - erfc(-x);
+    }
+    if x < 3.0 {
+        1.0 - erf_series(x)
+    } else {
+        erfc_continued_fraction(x)
+    }
+}
+
+/// `erf(x) = (2/√π) Σ (−1)ⁿ x^{2n+1} / (n!(2n+1))`, for moderate `x`.
+fn erf_series(x: f64) -> f64 {
+    let x2 = x * x;
+    let mut term = x; // (−1)ⁿ x^{2n+1} / n!, starting at n = 0
+    let mut sum = x;
+    for n in 1..200 {
+        term *= -x2 / n as f64;
+        let contribution = term / (2 * n + 1) as f64;
+        sum += contribution;
+        if contribution.abs() < 1e-17 * sum.abs() {
+            break;
+        }
+    }
+    2.0 / core::f64::consts::PI.sqrt() * sum
+}
+
+/// `erfc(x) = e^{−x²}/√π · 1/(x + (1/2)/(x + 1/(x + (3/2)/(x + …))))`,
+/// for `x ≥ 3`, evaluated from the deepest term outwards.
+fn erfc_continued_fraction(x: f64) -> f64 {
+    let mut t = x;
+    for k in (1..=60).rev() {
+        t = x + (k as f64 / 2.0) / t;
+    }
+    (-x * x).exp() / (core::f64::consts::PI.sqrt() * t)
 }
 
 /// Standard normal quantile by bisection on [`normal_cdf`].
 #[must_use]
 pub fn normal_ppf(p: f64) -> f64 {
-    assert!((0.0..=1.0).contains(&p), "quantile probability in [0, 1]");
+    if !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
     if p == 0.0 {
         return f64::NEG_INFINITY;
     }

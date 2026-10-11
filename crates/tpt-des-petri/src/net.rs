@@ -118,7 +118,18 @@ impl PetriNet {
     /// True if `t` can fire at `marking` (every pre-arc has enough tokens).
     pub fn is_enabled(&self, t: usize, marking: &Marking) -> bool {
         let transition = &self.transitions[t];
-        transition.pre.iter().all(|&(p, w)| marking.at(p) >= w)
+        // Duplicate arcs from one place must be enabled *together*: check the
+        // summed weight, not each arc against the same marking (which let
+        // `fire` underflow).
+        transition.pre.iter().all(|&(p, _)| {
+            let needed: u64 = transition
+                .pre
+                .iter()
+                .filter(|&&(q, _)| q == p)
+                .map(|&(_, w)| w as u64)
+                .sum();
+            marking.at(p) as u64 >= needed
+        })
     }
 
     /// All transitions enabled at `marking`, in index order.
@@ -129,7 +140,7 @@ impl PetriNet {
     }
 
     /// Fire `t` at `marking`, returning the successor marking, or `None` if
-    /// `t` is not enabled.
+    /// `t` is not enabled or would overflow a place's `u32` token count.
     pub fn fire(&self, t: usize, marking: &Marking) -> Option<Marking> {
         if !self.is_enabled(t, marking) {
             return None;
@@ -140,7 +151,7 @@ impl PetriNet {
             next[p] -= w;
         }
         for &(p, w) in &transition.post {
-            next[p] += w;
+            next[p] = next[p].checked_add(w)?;
         }
         Some(Marking(next))
     }

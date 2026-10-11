@@ -25,9 +25,11 @@ tpt-des-verify = { workspace = true, optional = true }
 
 [features]
 default = ["std", "core", "queue", "resource", "process", "petri", "markov", "stats"]
-# std enables the std feature of every included member (the numerics need
-# ln/exp; only tpt-des-core is genuinely no_std-capable).
-std = ["tpt-des-core/std", "tpt-des-queue/std", "tpt-des-resource/std", "tpt-des-petri/std", "tpt-des-markov/std", "tpt-des-stats/std"]
+# std enables the std feature of every *included* member. The `?` makes each
+# entry conditional on that member being enabled, so `std` alone does not pull
+# in every optional crate (the numerics need ln/exp; only tpt-des-core is
+# genuinely no_std-capable).
+std = ["tpt-des-core?/std", "tpt-des-queue?/std", "tpt-des-resource?/std", "tpt-des-petri?/std", "tpt-des-markov?/std", "tpt-des-stats?/std"]
 core = ["dep:tpt-des-core"]
 queue = ["dep:tpt-des-queue", "core"]
 resource = ["dep:tpt-des-resource", "core"]
@@ -37,6 +39,49 @@ markov = ["dep:tpt-des-markov"]
 stats = ["dep:tpt-des-stats"]
 verify = ["dep:tpt-des-verify", "core", "queue", "resource", "petri", "markov", "stats", "std"]
 # no_std subset: default-features = false, features = ["core"].
+# Only `core` is no_std-capable. Every other feature needs `std` (the queue,
+# resource, petri, markov, and stats numerics depend on crates that require
+# alloc/std), so enable `std` with them.
+
+[[example]]
+name = "mm1_vs_erlang"
+required-features = ["std", "queue"]
+
+[[example]]
+name = "deadlock_detection"
+required-features = ["std", "resource"]
+
+[[example]]
+name = "markov_absorption"
+required-features = ["std", "markov"]
+
+[[example]]
+name = "spn_reachability"
+required-features = ["std", "petri"]
+
+[[example]]
+name = "process_bank_teller"
+required-features = ["std", "process"]
+
+[[example]]
+name = "stats_replications"
+required-features = ["std", "queue", "stats"]
+
+[[example]]
+name = "hybrid_bridge"
+required-features = ["std", "process"]
+
+[[example]]
+name = "call_center_erlang"
+required-features = ["std", "queue"]
+
+[[example]]
+name = "inventory_store"
+required-features = ["std", "resource"]
+
+[[example]]
+name = "jackson_network"
+required-features = ["std", "queue"]
 
 [lints]
 workspace = true

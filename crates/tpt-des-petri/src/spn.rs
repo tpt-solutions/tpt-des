@@ -12,6 +12,7 @@
 use crate::net::{Marking, PetriNet};
 use crate::reach::{reachability, ReachabilityError};
 use alloc::vec::Vec;
+use std::collections::BTreeMap;
 use tpt_des_markov::Ctmc;
 use tpt_des_markov::MarkovError as CtmcError;
 use tpt_math_prob_core::{Distribution as _, SplitMix64};
@@ -63,19 +64,23 @@ impl StochasticPetriNet {
         if initial.0.len() != self.net.places() {
             return Err(SpnError::InvalidInitialMarking);
         }
+        if !horizon.is_finite() || horizon < 0.0 {
+            return Err(SpnError::InvalidHorizon);
+        }
         let mut rng = SplitMix64::seed_from_u64(seed);
         let mut marking = initial.clone();
         let mut time = 0.0;
-        let mut occupancy: Vec<(Marking, f64)> = Vec::new();
+        let mut occupancy: BTreeMap<Marking, f64> = BTreeMap::new();
         let mut firing_counts = vec![0u64; self.net.transitions()];
         let mut total_firings = 0u64;
 
         // Accumulate occupancy time per distinct marking.
-        let occupy = |occupancy: &mut Vec<(Marking, f64)>, m: &Marking, dt: f64| {
-            if let Some(entry) = occupancy.iter_mut().find(|(mm, _)| mm == m) {
-                entry.1 += dt;
+        // O(log k) per firing instead of a linear scan over visited markings.
+        let occupy = |occupancy: &mut BTreeMap<Marking, f64>, m: &Marking, dt: f64| {
+            if let Some(total) = occupancy.get_mut(m) {
+                *total += dt;
             } else {
-                occupancy.push((m.clone(), dt));
+                occupancy.insert(m.clone(), dt);
             }
         };
 
@@ -109,7 +114,7 @@ impl StochasticPetriNet {
             final_marking: marking,
             firing_counts,
             total_firings,
-            occupancy,
+            occupancy: occupancy.into_iter().collect(),
             horizon,
         })
     }
@@ -127,6 +132,11 @@ impl StochasticPetriNet {
         let graph =
             reachability(&self.net, initial, max_states).map_err(SpnError::from_reachability)?;
         let n = graph.len();
+        // The generator is stored densely (n² f64), so bound n before
+        // allocating: 4096 states is 128 MiB.
+        if n > MAX_CTMC_STATES {
+            return Err(SpnError::TooManyStates);
+        }
         let mut rows = vec![vec![0.0f64; n]; n];
         for (i, edges) in graph.edges.iter().enumerate() {
             for &(t, j) in edges {
@@ -165,6 +175,9 @@ pub enum SpnError {
     CtmcConversion,
     /// Internal: a categorical draw found no positive rate.
     NoEnabledTransition,
+    /// The horizon is NaN, infinite, or negative. An infinite horizon on a
+    /// live net would never end.
+    InvalidHorizon,
 }
 
 impl SpnError {
@@ -179,6 +192,27 @@ impl SpnError {
         SpnError::CtmcConversion
     }
 }
+
+/// Largest state space [`StochasticPetriNet::to_ctmc`] will densify.
+pub const MAX_CTMC_STATES: usize = 4096;
+
+impl core::fmt::Display for SpnError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SpnError::InvalidRate => write!(f, "firing rate must be finite and non-negative"),
+            SpnError::InvalidInitialMarking => {
+                write!(f, "initial marking does not match the net's place count")
+            }
+            SpnError::TooManyStates => write!(f, "state space exceeds the configured bound"),
+            SpnError::CtmcConversion => write!(f, "could not build the CTMC generator"),
+            SpnError::NoEnabledTransition => write!(f, "no enabled transition has a positive rate"),
+            SpnError::InvalidHorizon => write!(f, "horizon must be finite and non-negative"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for SpnError {}
 
 /// One simulation run's measurements.
 #[derive(Clone, Debug, PartialEq)]

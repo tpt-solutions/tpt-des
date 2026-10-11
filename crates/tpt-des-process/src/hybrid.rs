@@ -85,11 +85,20 @@ impl<M: ContinuousModel> core::fmt::Debug for HybridBridge<M> {
 impl<M: ContinuousModel> HybridBridge<M> {
     /// A bridge interrupting `target` when the guard crosses `threshold`;
     /// continuous time advances in `step` increments.
+    ///
+    /// # Panics
+    ///
+    /// If `threshold` is NaN, or `step` is not finite and positive.
     pub fn new(target: ProcessId, threshold: f64, step: f64) -> Self {
+        assert!(!threshold.is_nan(), "guard threshold must not be NaN");
+        assert!(
+            step.is_finite() && step > 0.0,
+            "integration step must be finite and positive, got {step}"
+        );
         Self {
             model: None,
             threshold,
-            step: step.max(f64::MIN_POSITIVE),
+            step,
             now: 0.0,
             last_guard: None,
             target,
@@ -120,7 +129,16 @@ impl<M: ContinuousModel> HybridBridge<M> {
 
     /// Advance the model one step; interrupts the target process when the
     /// guard crosses the threshold. Returns the new continuous time.
+    ///
+    /// # Panics
+    ///
+    /// If `dt` is NaN, infinite, or negative: integrating over such a span
+    /// would silently skip the step or never terminate.
     pub fn step(&mut self, system: &ProcessSystem, dt: f64) -> f64 {
+        assert!(
+            dt.is_finite() && dt >= 0.0,
+            "step duration must be finite and non-negative, got {dt}"
+        );
         let Some(model) = self.model.as_mut() else {
             return self.now;
         };

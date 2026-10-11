@@ -11,6 +11,7 @@ fn mm1_config(lambda: f64, mu: f64) -> QueueConfig {
         service: Box::new(Exponential::new(mu).unwrap()),
         discipline: Discipline::Fifo,
         capacity: None,
+        priority: None,
     }
 }
 
@@ -27,7 +28,7 @@ fn replication_deletion_covers_analytical_mean_wait() {
         let m = run_queue(mm1_config(lambda, mu), horizon, warmup, seed * 1_000);
         replications.push(vec![m.mean_sojourn()]);
     }
-    let rd = batch::replication_deletion(&replications, 0, 0.95);
+    let rd = batch::replication_deletion(&replications, 0, 0.95).unwrap();
     assert_eq!(rd.replications, 6);
     // The 95% interval covers the analytical W = 1/(μ−λ).
     assert!(
@@ -58,7 +59,7 @@ fn batch_means_interval_covers_analytical_wait() {
         series.push(m.utilization());
         elapsed += chunk;
     }
-    let bm = batch::batch_means(&series, 10, 0.95);
+    let bm = batch::batch_means(&series, 10, 0.95).unwrap();
     // Utilization should average to ρ = 0.6.
     assert!(
         bm.ci.0 <= exact.rho && exact.rho <= bm.ci.1,
@@ -106,7 +107,7 @@ fn blocking_proportion_ci_covers_erlang_b() {
     let attempts = m.arrived + m.blocked;
     assert!(attempts > 10_000);
     let observed = m.blocked as f64 / attempts as f64;
-    let (lo, hi) = ci::proportion_wilson(m.blocked as usize, attempts as usize, 0.95);
+    let (lo, hi) = ci::proportion_wilson(m.blocked as usize, attempts as usize, 0.95).unwrap();
     assert!(
         lo <= erlang && erlang <= hi,
         "Wilson CI [{lo}, {hi}] must cover Erlang B = {erlang} (observed {observed})"

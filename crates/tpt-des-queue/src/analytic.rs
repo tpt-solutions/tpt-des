@@ -62,7 +62,8 @@ pub fn mm1(lambda: f64, mu: f64) -> Result<Mm1Result, QueueError> {
 /// Steady-state probability of `n` jobs in an M/M/1 queue: `P_n = (1−ρ)·ρⁿ`.
 pub fn mm1_pn(lambda: f64, mu: f64, n: u32) -> Result<f64, QueueError> {
     let r = mm1(lambda, mu)?;
-    Ok(r.p0 * r.rho.powi(n as i32))
+    // powf rather than powi: `n as i32` wraps for n > i32::MAX.
+    Ok(r.p0 * r.rho.powf(n as f64))
 }
 
 /// Results for an M/M/c queue with `c` identical servers.
@@ -105,25 +106,11 @@ pub fn mmc(lambda: f64, mu: f64, c: u32) -> Result<MmcResult, QueueError> {
         return Err(QueueError::InvalidParameter);
     }
     let a = lambda / mu;
-    let c = c as f64;
-    if a >= c {
+    if a >= c as f64 {
         return Err(QueueError::Unstable);
     }
-    let rho = a / c;
-
-    // P0 = [ Σ_{n=0}^{c-1} aⁿ/n! + a^c/c! · 1/(1−ρ) ]⁻¹
-    let mut sum = 1.0; // n = 0 term
-    let mut term = 1.0;
-    for n in 1..(c as i64) {
-        term *= a / n as f64;
-        sum += term;
-    }
-    // a^c/c!: continue the product one more step.
-    term *= a / c;
-    let overflow_term = term / (1.0 - rho);
-    let p0 = 1.0 / (sum + overflow_term);
-
-    let erlang_c = overflow_term * p0;
+    let rho = a / c as f64;
+    let (erlang_c, p0) = erlang_c_and_p0(a, c);
     let lq = erlang_c * rho / (1.0 - rho);
     let l = lq + a;
     let wq = lq / lambda;
@@ -223,8 +210,40 @@ pub fn erlang_c(a: f64, c: u32) -> Result<f64, QueueError> {
     if a < 0.0 || !a.is_finite() || c == 0 {
         return Err(QueueError::InvalidParameter);
     }
-    let r = mmc(a, 1.0, c)?;
-    Ok(r.erlang_c)
+    // No offered traffic: nobody waits.
+    if a == 0.0 {
+        return Ok(0.0);
+    }
+    if a >= c as f64 {
+        return Err(QueueError::Unstable);
+    }
+    Ok(erlang_c_and_p0(a, c).0)
+}
+
+/// Erlang C and the empty-system probability `P0` for `0 < a < c`, computed
+/// in log space so that large `c` cannot overflow `aⁿ/n!`.
+///
+/// `ln(aⁿ/n!)` is built incrementally; the normalizer
+/// `Σ_{n<c} aⁿ/n! + a^c/(c!(1−ρ))` is summed with the usual log-sum-exp
+/// shift, so every term is `exp(x)` with `x ≤ 0`.
+fn erlang_c_and_p0(a: f64, c: u32) -> (f64, f64) {
+    let rho = a / c as f64;
+    let ln_a = a.ln();
+    let mut log_terms = Vec::with_capacity(c as usize + 1);
+    let mut lt = 0.0;
+    log_terms.push(lt);
+    for n in 1..=c {
+        lt += ln_a - (n as f64).ln();
+        log_terms.push(lt);
+    }
+    let ln_tail = log_terms[c as usize] - (1.0 - rho).ln();
+    let head = &log_terms[..c as usize];
+    let shift = head.iter().copied().fold(ln_tail, f64::max);
+    let sum: f64 = head.iter().map(|&x| (x - shift).exp()).sum::<f64>() + (ln_tail - shift).exp();
+    let ln_total = shift + sum.ln();
+    let p0 = (-ln_total).exp();
+    let erlang_c = (ln_tail - ln_total).exp();
+    (erlang_c, p0)
 }
 
 #[cfg(test)]

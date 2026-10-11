@@ -4,7 +4,7 @@
 //! Architecture: all state lives behind one `Rc<RefCell<Shared>>`. The
 //! executor never holds the lock while polling a future — it takes the
 //! pinned future out, polls it, and puts it back — so process bodies (and
-//! the operation futures in [`ops`]) can freely lock the state during
+//! the operation futures in [`ops`](crate::ops)) can freely lock the state during
 //! their own polls without re-entrancy.
 
 use crate::ops::{Acquire, Delay, WaitUntil};
@@ -95,39 +95,34 @@ impl Sim {
     }
 
     /// Acquire `amount` units of `resource` (all-or-nothing, FIFO waiters).
+    ///
+    /// # Panics
+    ///
+    /// If `amount` exceeds the resource's capacity: such a request could
+    /// never be granted and would block forever.
     pub fn acquire(&self, resource: u64, amount: usize) -> Acquire {
+        if let Some(&capacity) = self.shared.borrow().capacities.get(&resource) {
+            assert!(
+                amount <= capacity,
+                "acquire of {amount} units exceeds capacity {capacity} of resource {resource}"
+            );
+        }
         Acquire::new(self.clone(), self.current_pid(), resource, amount)
     }
 
-    /// Return `amount` units to `resource`; wakes FIFO waiters that now fit.
+    /// Return `amount` units to `resource` and wake the FIFO head if its
+    /// request now fits.
+    ///
+    /// Free units are clamped at the resource's capacity, so a release can
+    /// never create units. Releasing an unregistered resource is a no-op.
     pub fn release(&self, resource: u64, amount: usize) {
-        let woken: Vec<ProcessId> = {
-            let mut shared = self.shared.borrow_mut();
-            *shared.resources.entry(resource).or_insert(0) += amount;
-            let mut woken = Vec::new();
-            loop {
-                let available = shared.resources.get(&resource).copied().unwrap_or(0);
-                let front = shared
-                    .resource_waiters
-                    .get(&resource)
-                    .and_then(|q| q.front().copied());
-                match front {
-                    Some((pid, units)) if units <= available => {
-                        shared
-                            .resource_waiters
-                            .get_mut(&resource)
-                            .expect("front existed")
-                            .pop_front();
-                        *shared.resources.get_mut(&resource).expect("checked") -= units;
-                        shared.ready.push_back(pid);
-                        woken.push(pid);
-                    }
-                    _ => break,
-                }
-            }
-            woken
+        let mut shared = self.shared.borrow_mut();
+        let Some(&capacity) = shared.capacities.get(&resource) else {
+            return;
         };
-        let _ = woken;
+        let free = shared.resources.entry(resource).or_insert(0);
+        *free = free.saturating_add(amount).min(capacity);
+        wake_front(&mut shared, resource);
     }
 
     /// Units currently free of `resource`.
@@ -152,26 +147,26 @@ impl Sim {
     /// Re-check every registered `wait_until` predicate and wake the
     /// processes whose predicates now hold. Call after any state change a
     /// condition might depend on.
+    ///
+    /// Predicates run with no internal borrow held, so they may read the
+    /// simulation state through `&Sim` (e.g. [`Sim::available`]). They must
+    /// not register new waits or call `notify_all` themselves.
     pub fn notify_all(&self) {
-        let woken: Vec<ProcessId> = {
-            let mut shared = self.shared.borrow_mut();
-            let sim = Sim {
-                shared: self.shared.clone(),
-            };
-            let mut woken = Vec::new();
-            let mut i = 0;
-            while i < shared.conditions.len() {
-                let satisfied = (shared.conditions[i].predicate)(&sim);
-                if satisfied {
-                    let condition = shared.conditions.remove(i);
-                    woken.extend(condition.procs);
-                } else {
-                    i += 1;
-                }
+        let conditions = core::mem::take(&mut self.shared.borrow_mut().conditions);
+        let mut kept = Vec::with_capacity(conditions.len());
+        let mut woken = Vec::new();
+        for condition in conditions {
+            if (condition.predicate)(self) {
+                woken.extend(condition.procs);
+            } else {
+                kept.push(condition);
             }
-            woken
-        };
+        }
         let mut shared = self.shared.borrow_mut();
+        // Conditions registered while predicates ran were appended to the
+        // (empty) registry; keep them after the survivors.
+        kept.append(&mut shared.conditions);
+        shared.conditions = kept;
         shared.ready.extend(woken);
     }
 
@@ -182,7 +177,7 @@ impl Sim {
     /// A process may interrupt itself while running.
     pub fn interrupt(&self, target: ProcessId) {
         let mut shared = self.shared.borrow_mut();
-        if shared.procs.get(&target).is_none_or(|e| e.finished) {
+        if !is_alive(&shared, target) {
             return;
         }
         shared.interrupted.insert(target);
@@ -192,20 +187,22 @@ impl Sim {
 
     /// True if the process finished (normally or by returning an error).
     pub fn is_finished(&self, pid: ProcessId) -> bool {
-        let shared = self.shared.borrow();
-        shared.procs.get(&pid).is_none_or(|e| e.finished)
+        !is_alive(&self.shared.borrow(), pid)
     }
 
-    /// How many processes are registered (finished ones included).
+    /// How many processes are still alive (finished ones are dropped).
     pub fn process_count(&self) -> usize {
         self.shared.borrow().procs.len()
     }
 
     fn current_pid(&self) -> ProcessId {
         let shared = self.shared.borrow();
-        shared
-            .polling
-            .expect("blocking operations may only be awaited inside a spawned process")
+        match shared.polling {
+            Some(pid) => pid,
+            None => panic!(
+                "blocking operation (delay/acquire/wait_until) used outside a spawned process;                  create it inside a body passed to `spawn`"
+            ),
+        }
     }
 }
 
@@ -236,6 +233,8 @@ pub(crate) struct Shared {
     pub(crate) procs: BTreeMap<ProcessId, ProcEntry>,
     pub(crate) ready: VecDeque<ProcessId>,
     pub(crate) resources: BTreeMap<u64, usize>,
+    /// Total units per resource; `release` never lifts `resources` above it.
+    pub(crate) capacities: BTreeMap<u64, usize>,
     pub(crate) resource_waiters: BTreeMap<u64, VecDeque<(ProcessId, usize)>>,
     pub(crate) conditions: Vec<Condition>,
     pub(crate) timers: tpt_des_core::EventCalendar<tpt_des_core::Seconds, ProcessId>,
@@ -251,17 +250,47 @@ pub(crate) struct Shared {
     pub(crate) polling: Option<ProcessId>,
 }
 
+/// A process is alive while it is registered and unfinished. The process
+/// being polled is removed from `procs` for the duration of its poll, so it
+/// is checked via `polling` — this keeps self-interruption working.
+pub(crate) fn is_alive(shared: &Shared, pid: ProcessId) -> bool {
+    shared.polling == Some(pid) || shared.procs.get(&pid).is_some_and(|e| !e.finished)
+}
+
 /// Cancel every pending registration of `pid` (timers, resource queues,
 /// condition lists).
 pub(crate) fn cancel_pending(shared: &mut Shared, pid: ProcessId) {
     if let Some(event) = shared.pending_timers.remove(&pid) {
         shared.timers.cancel(event);
     }
-    for queue in shared.resource_waiters.values_mut() {
-        queue.retain(|&(w, _)| w != pid);
+    let resources: Vec<u64> = shared.resource_waiters.keys().copied().collect();
+    for resource in resources {
+        if let Some(queue) = shared.resource_waiters.get_mut(&resource) {
+            queue.retain(|&(w, _)| w != pid);
+        }
+        // Removing a queued head may let the next waiter through.
+        wake_front(shared, resource);
     }
     for condition in &mut shared.conditions {
         condition.procs.retain(|&p| p != pid);
+    }
+    shared.conditions.retain(|c| !c.procs.is_empty());
+}
+
+/// Make the FIFO head of `resource`'s queue runnable if its request fits
+/// the currently free units. The head itself takes the units when it is
+/// polled (see [`Acquire`]), so waking never reserves capacity on anyone's
+/// behalf.
+pub(crate) fn wake_front(shared: &mut Shared, resource: u64) {
+    let available = shared.resources.get(&resource).copied().unwrap_or(0);
+    let head = shared
+        .resource_waiters
+        .get(&resource)
+        .and_then(|q| q.front().copied());
+    if let Some((pid, units)) = head {
+        if units <= available && !shared.ready.contains(&pid) {
+            shared.ready.push_back(pid);
+        }
     }
 }
 
@@ -286,6 +315,7 @@ impl ProcessSystem {
             procs: BTreeMap::new(),
             ready: VecDeque::new(),
             resources: BTreeMap::new(),
+            capacities: BTreeMap::new(),
             resource_waiters: BTreeMap::new(),
             conditions: Vec::new(),
             timers: tpt_des_core::EventCalendar::new(),
@@ -338,11 +368,9 @@ impl ProcessSystem {
 
     /// Register a resource with initial free units.
     pub fn add_resource(&self, resource: u64, units: usize) {
-        self.sim
-            .shared
-            .borrow_mut()
-            .resources
-            .insert(resource, units);
+        let mut shared = self.sim.shared.borrow_mut();
+        shared.resources.insert(resource, units);
+        shared.capacities.insert(resource, units);
     }
 
     /// Run until every process finished, or events are exhausted (which
@@ -359,8 +387,8 @@ impl ProcessSystem {
             Stop,
         }
         loop {
-            // Fire all timers up to the horizon into the ready queue.
-            self.pump(horizon);
+            // Runnable processes run at the current instant before any timer
+            // advances the clock (see `pump_one`).
             let action = {
                 let mut shared = self.sim.shared.borrow_mut();
                 if let Some(&pid) = shared.ready.front() {
@@ -382,15 +410,19 @@ impl ProcessSystem {
                         self.poll_one(pid);
                     }
                 }
-                Action::Pump => continue,
+                Action::Pump => self.pump_one(horizon),
                 Action::Stop => break,
             }
         }
     }
 
-    fn pump(&self, horizon: f64) {
+    /// Fire the earliest pending timer: advance the clock to it and make its
+    /// process runnable. Firing one timer at a time keeps the clock from
+    /// running ahead of processes that are already runnable at an earlier
+    /// instant.
+    fn pump_one(&self, horizon: f64) {
         let mut shared = self.sim.shared.borrow_mut();
-        while let Some(popped) = shared.timers.pop_until(horizon) {
+        if let Some(popped) = shared.timers.pop_until(horizon) {
             shared.now = shared.now.max(popped.time);
             let pid = popped.payload;
             shared.pending_timers.remove(&pid);
@@ -420,7 +452,11 @@ impl ProcessSystem {
 
         let mut shared = self.sim.shared.borrow_mut();
         shared.polling = None;
-        shared.procs.insert(pid, entry);
+        // Finished futures are dropped; `is_finished` treats a missing entry
+        // as finished, so no state is lost.
+        if !entry.finished {
+            shared.procs.insert(pid, entry);
+        }
     }
 }
 

@@ -56,6 +56,11 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 [workspace.lints.clippy]
 all = "warn"
 
+# Tests run the proptest-heavy simulation checks; opt-level 1 keeps debug
+# iteration usable without changing semantics (overflow checks stay on).
+[profile.test]
+opt-level = 1
+
 [profile.release]
 opt-level = 3
 lto = "fat"

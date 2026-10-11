@@ -6,7 +6,7 @@
 //! trace bit-for-bit (see the replay test at the bottom of this file), and
 //! [`SimRng::restart`] rewinds to the initial seed mid-flight.
 //!
-//! The RNG implements [`Rng`](tpt_math_prob_core::Rng), so every
+//! The RNG implements [`Rng`], so every
 //! `tpt-math-prob-dist` / `tpt-math-prob-sampler` distribution can sample
 //! from it directly.
 
@@ -57,7 +57,13 @@ impl SimRng {
 
     /// Access the underlying `SplitMix64` (e.g. to hand to a
     /// `tpt-math-prob-dist` distribution's `sample`).
+    ///
+    /// Every call counts as one draw in [`draws`](Self::draws), so the
+    /// fingerprint still changes whenever randomness is requested through this
+    /// handle. It counts accesses, not 64-bit words: a caller that consumes
+    /// several words per access advances the fingerprint by one.
     pub fn core_mut(&mut self) -> &mut SplitMix64 {
+        self.draws += 1;
         &mut self.inner
     }
 }

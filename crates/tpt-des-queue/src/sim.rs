@@ -1,6 +1,6 @@
 //! Discrete-event simulation of single-station queues.
 //!
-//! [`SimQueue`] is a [`tpt-des-core`] entity combining an arrival source, an
+//! [`SimQueue`] is a `tpt-des-core` entity combining an arrival source, an
 //! unbounded (or bounded) waiting line, and a server; [`run_queue`] is the
 //! one-call driver. Inter-arrival and service times come from any
 //! [`RateSampler`] — [`Exponential`] (backed by `tpt-math-prob-dist`) or a
@@ -15,6 +15,7 @@
 
 use crate::error::QueueError;
 use core::fmt;
+use std::collections::{BTreeMap, VecDeque};
 use tpt_des_core::{Ctx, Entity, EntityId, Seconds, SimRng, Simulation, Time};
 use tpt_math_prob_core::Distribution as _;
 use tpt_math_prob_dist::{exp, Dist};
@@ -131,9 +132,31 @@ pub struct QueueMetrics {
     pub last_t: f64,
     /// Window start for the current accumulation ([`SimQueue::reset_metrics`]).
     pub reset_at: f64,
+    /// Per-priority-class wait totals, keyed by job priority (lower number =
+    /// more urgent). Every job lands in class `0` unless
+    /// [`QueueConfig::priority`] is set.
+    pub waits_by_priority: BTreeMap<i64, ClassWait>,
+}
+
+/// Wait-time totals for one priority class.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClassWait {
+    /// Jobs of this class that started service (post warm-up).
+    pub started: u64,
+    /// Sum of their queue-wait times.
+    pub total_wait: f64,
 }
 
 impl QueueMetrics {
+    /// Mean queue-wait of jobs in `priority`'s class, or `None` if no job of
+    /// that class started service in the measured window.
+    pub fn mean_wait_for_priority(&self, priority: i64) -> Option<f64> {
+        self.waits_by_priority
+            .get(&priority)
+            .filter(|c| c.started > 0)
+            .map(|c| c.total_wait / c.started as f64)
+    }
+
     /// Mean queue-wait over completed jobs (0 if none completed).
     pub fn mean_wait(&self) -> f64 {
         if self.completed == 0 {
@@ -195,7 +218,15 @@ pub struct QueueConfig {
     /// Maximum number of jobs in the system (waiting + in service);
     /// `None` for an infinite buffer. Blocked arrivals are counted, not queued.
     pub capacity: Option<usize>,
+    /// Priority class of each arriving job (lower number = more urgent),
+    /// drawn from the simulation RNG. `None` puts every job in class `0`,
+    /// which makes [`Discipline::Priority`] behave as FIFO. Only
+    /// [`Discipline::Priority`] reads it.
+    pub priority: Option<PriorityFn>,
 }
+
+/// A per-arrival priority-class draw. See [`QueueConfig::priority`].
+pub type PriorityFn = Box<dyn FnMut(&mut SimRng) -> i64>;
 
 impl fmt::Debug for QueueConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -204,6 +235,7 @@ impl fmt::Debug for QueueConfig {
             .field("service", &self.service)
             .field("discipline", &self.discipline)
             .field("capacity", &self.capacity)
+            .field("priority", &self.priority.as_ref().map(|_| "<fn>"))
             .finish()
     }
 }
@@ -215,7 +247,7 @@ pub struct SimQueue {
     /// Warm-up cutoff: jobs arriving before this time are excluded from the
     /// wait/sojourn accumulators, and the time integrals restart here.
     warmup: f64,
-    waiting: Vec<Job>,
+    waiting: VecDeque<Job>,
     in_service: Vec<Job>, // 0..1 jobs, or 0..n under processor sharing
     next_job: u64,
     /// Departure event currently scheduled (processor sharing reschedules it
@@ -246,12 +278,20 @@ impl SimQueue {
 
     /// Create a queue entity with a warm-up cutoff at `warmup` (absolute
     /// time): arrivals before it are excluded from the measurements.
+    ///
+    /// # Panics
+    ///
+    /// If `warmup` is NaN or negative.
     pub fn with_warmup(id: EntityId, config: QueueConfig, warmup: f64) -> Self {
+        assert!(
+            warmup.is_finite() && warmup >= 0.0,
+            "warm-up must be a finite, non-negative time, got {warmup}"
+        );
         Self {
             id,
             config,
             warmup,
-            waiting: Vec::new(),
+            waiting: VecDeque::new(),
             in_service: Vec::new(),
             next_job: 0,
             pending_departure: None,
@@ -276,13 +316,32 @@ impl SimQueue {
         };
     }
 
-    /// Apply the warm-up cutoff once, on the first event at/after it.
-    fn maybe_apply_warmup(&mut self, now: f64) {
+    /// Advance the measurement clock to `now`, applying the warm-up cutoff
+    /// on the way. The population integral is taken up to the exact cutoff
+    /// (and then discarded), so no interval is lost or mis-attributed.
+    fn advance_to(&mut self, now: f64) {
         if self.warmup > 0.0 && now >= self.warmup && self.metrics.reset_at < self.warmup {
+            self.update_integrals(self.warmup);
             self.reset_metrics();
-            self.metrics.reset_at = now;
-            self.metrics.last_t = now;
+            self.metrics.reset_at = self.warmup;
         }
+        self.update_integrals(now);
+    }
+
+    /// Close the measurement window at `horizon`: integrate the final span
+    /// up to it, so `time_avg_number` and `utilization` cover the whole
+    /// window. [`run_queue`] calls this after the run.
+    ///
+    /// # Panics
+    ///
+    /// If `horizon` is not later than the warm-up cutoff.
+    pub fn finalize(&mut self, horizon: f64) {
+        assert!(
+            horizon >= self.warmup,
+            "horizon {horizon} precedes the warm-up cutoff {}",
+            self.warmup
+        );
+        self.advance_to(horizon);
     }
 
     /// True if a job that arrived at `t` counts toward the measurements.
@@ -303,8 +362,8 @@ impl SimQueue {
     /// Pick the next job from the waiting line per the discipline.
     fn take_next(&mut self) -> Option<Job> {
         match self.config.discipline {
-            Discipline::Fifo => (!self.waiting.is_empty()).then(|| self.waiting.remove(0)),
-            Discipline::Lifo => self.waiting.pop(),
+            Discipline::Fifo => self.waiting.pop_front(),
+            Discipline::Lifo => self.waiting.pop_back(),
             Discipline::Priority => {
                 let mut best = 0usize;
                 for (i, job) in self.waiting.iter().enumerate() {
@@ -315,14 +374,14 @@ impl SimQueue {
                         best = i;
                     }
                 }
-                (!self.waiting.is_empty()).then(|| self.waiting.remove(best))
+                self.waiting.remove(best)
             }
             Discipline::ProcessorSharing => None, // handled separately
         }
     }
 
     fn schedule_next_arrival(&mut self, ctx: &mut Ctx<'_, Seconds, QueueEvent>) {
-        let delay = self.config.arrival.draw(ctx.rng);
+        let delay = checked_sample(self.config.arrival.draw(ctx.rng), "inter-arrival");
         let job = self.next_job;
         ctx.schedule::<0>(Time::from_raw(delay), self.id, QueueEvent::Arrival(job));
         self.next_job += 1;
@@ -384,8 +443,7 @@ impl Entity<Seconds, QueueEvent> for SimQueue {
 
     fn on_event(&mut self, event: QueueEvent, ctx: &mut Ctx<'_, Seconds, QueueEvent>) {
         let now = ctx.now.raw();
-        self.maybe_apply_warmup(now);
-        self.update_integrals(now);
+        self.advance_to(now);
         match event {
             QueueEvent::Arrival(_) => {
                 self.schedule_next_arrival(ctx);
@@ -399,16 +457,20 @@ impl Entity<Seconds, QueueEvent> for SimQueue {
                 }
                 self.metrics.arrived += 1;
 
+                let priority = match self.config.priority.as_mut() {
+                    Some(draw) => draw(ctx.rng),
+                    None => 0,
+                };
                 match self.config.discipline {
                     Discipline::ProcessorSharing => {
                         // Existing jobs consumed work up to now; the new job
                         // starts fresh from this instant.
                         self.ps_advance(now);
-                        let work = self.config.service.draw(ctx.rng);
+                        let work = checked_sample(self.config.service.draw(ctx.rng), "service");
                         self.in_service.push(Job {
                             id: event_id_of(&event),
                             arrived_at: now,
-                            priority: 0,
+                            priority,
                             work,
                         });
                         self.ps_reschedule(ctx);
@@ -417,13 +479,13 @@ impl Entity<Seconds, QueueEvent> for SimQueue {
                         let job = Job {
                             id: event_id_of(&event),
                             arrived_at: now,
-                            priority: 0,
+                            priority,
                             work: 0.0,
                         };
                         if self.in_service.is_empty() {
                             self.start_service(job, ctx);
                         } else {
-                            self.waiting.push(job);
+                            self.waiting.push_back(job);
                         }
                     }
                 }
@@ -460,9 +522,17 @@ impl Entity<Seconds, QueueEvent> for SimQueue {
 impl SimQueue {
     fn start_service(&mut self, job: Job, ctx: &mut Ctx<'_, Seconds, QueueEvent>) {
         if self.counts(job.arrived_at) {
-            self.metrics.total_wait += ctx.now.raw() - job.arrived_at;
+            let wait = ctx.now.raw() - job.arrived_at;
+            self.metrics.total_wait += wait;
+            let class = self
+                .metrics
+                .waits_by_priority
+                .entry(job.priority)
+                .or_default();
+            class.started += 1;
+            class.total_wait += wait;
         }
-        let service = self.config.service.draw(ctx.rng);
+        let service = checked_sample(self.config.service.draw(ctx.rng), "service");
         let mut started = job;
         started.work = service;
         self.in_service.push(started);
@@ -472,6 +542,16 @@ impl SimQueue {
             QueueEvent::Departure(job.id),
         );
     }
+}
+
+/// Reject NaN, infinite, and negative samples from a user distribution:
+/// they would corrupt event ordering (in release builds too).
+fn checked_sample(value: f64, what: &str) -> f64 {
+    assert!(
+        value.is_finite() && value >= 0.0,
+        "{what} sample must be finite and non-negative, got {value}"
+    );
+    value
 }
 
 fn event_id_of(event: &QueueEvent) -> u64 {
@@ -486,6 +566,11 @@ fn event_id_of(event: &QueueEvent) -> u64 {
 /// Deterministic: the same `seed`, config, and horizons reproduce the same
 /// metrics bit-for-bit.
 ///
+/// # Panics
+///
+/// If `horizon` is not finite and positive, or `warmup` is not in
+/// `[0, horizon)`.
+///
 /// # Examples
 ///
 /// An M/M/1 queue at ρ = 0.5 has mean sojourn `W = 1/(μ−λ) = 2`:
@@ -499,6 +584,7 @@ fn event_id_of(event: &QueueEvent) -> u64 {
 ///         service: Box::new(Exponential::new(1.0).unwrap()),
 ///         discipline: Discipline::Fifo,
 ///         capacity: None,
+///         priority: None,
 ///     },
 ///     20_000.0, // horizon
 ///     2_000.0,  // warm-up
@@ -507,6 +593,14 @@ fn event_id_of(event: &QueueEvent) -> u64 {
 /// assert!((metrics.mean_sojourn() - 2.0).abs() < 0.4);
 /// ```
 pub fn run_queue(config: QueueConfig, horizon: f64, warmup: f64, seed: u64) -> QueueMetrics {
+    assert!(
+        horizon.is_finite() && horizon > 0.0,
+        "horizon must be finite and positive, got {horizon}"
+    );
+    assert!(
+        warmup.is_finite() && (0.0..horizon).contains(&warmup),
+        "warm-up must lie in [0, horizon), got {warmup} with horizon {horizon}"
+    );
     let mut queue = SimQueue::with_warmup(EntityId(0), config, warmup);
     {
         let mut sim = Simulation::new(seed);
@@ -514,5 +608,6 @@ pub fn run_queue(config: QueueConfig, horizon: f64, warmup: f64, seed: u64) -> Q
         sim.run_until(Time::<Seconds>::from_raw(horizon));
         sim.finalize();
     }
+    queue.finalize(horizon);
     queue.metrics().clone()
 }

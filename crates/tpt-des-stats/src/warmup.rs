@@ -42,16 +42,18 @@ pub fn moving_average(series: &[f64], window: usize) -> Vec<f64> {
     if series.is_empty() || window == 0 {
         return Vec::new();
     }
-    let half = (window / 2) as isize;
-    series
-        .iter()
-        .enumerate()
-        .map(|(i, _)| {
-            let i = i as isize;
-            let lo = (i - half).max(0) as usize;
-            let hi = ((i + half + 1) as usize).min(series.len());
-            let slice = &series[lo..hi];
-            slice.iter().sum::<f64>() / slice.len() as f64
+    let half = window / 2;
+    // Prefix sums make each window O(1): the whole pass is O(n).
+    let mut prefix = Vec::with_capacity(series.len() + 1);
+    prefix.push(0.0);
+    for &x in series {
+        prefix.push(prefix[prefix.len() - 1] + x);
+    }
+    (0..series.len())
+        .map(|i| {
+            let lo = i.saturating_sub(half);
+            let hi = (i + half + 1).min(series.len());
+            (prefix[hi] - prefix[lo]) / (hi - lo) as f64
         })
         .collect()
 }
@@ -75,17 +77,6 @@ pub fn welch_warmup(smoothed: &[f64], frac: f64, sustained: usize) -> usize {
         }
     }
     0
-}
-
-/// Variance of the sample mean of `data` (σ²/n with sample variance).
-fn variance_of_mean(data: &[f64]) -> f64 {
-    if data.len() < 2 {
-        return f64::INFINITY;
-    }
-    let n = data.len() as f64;
-    let mean = data.iter().sum::<f64>() / n;
-    let var = data.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (n - 1.0);
-    var / n
 }
 
 /// MSER: truncation index minimizing the standard error of the truncated
@@ -117,10 +108,25 @@ pub fn mser_stride(series: &[f64], stride: usize) -> usize {
         .map(|c| c.iter().sum::<f64>() / stride as f64)
         .collect();
 
+    // Standard error of the mean of each suffix `batched[d..]`, built
+    // backwards with Welford's update so no suffix is rescanned.
+    let half = batched.len() / 2;
+    let mut sems = vec![f64::INFINITY; half];
+    let (mut count, mut mean, mut m2) = (0.0f64, 0.0f64, 0.0f64);
+    for d in (0..batched.len()).rev() {
+        let x = batched[d];
+        count += 1.0;
+        let delta = x - mean;
+        mean += delta / count;
+        m2 += delta * (x - mean);
+        if d < half && count >= 2.0 {
+            let var_of_mean = m2 / (count - 1.0) / count;
+            sems[d] = var_of_mean.sqrt();
+        }
+    }
     let mut best_d = 0usize;
     let mut best_sem = f64::INFINITY;
-    for d in 0..batched.len() / 2 {
-        let sem = variance_of_mean(&batched[d..]).sqrt();
+    for (d, &sem) in sems.iter().enumerate() {
         if sem < best_sem {
             best_sem = sem;
             best_d = d;

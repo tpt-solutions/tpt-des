@@ -63,8 +63,8 @@ pub enum PreemptPolicy {
     /// preemption.
     Priority,
     /// Waiters compete by priority, and a sufficiently urgent request may
-    /// preempt units from lower-priority holders (earliest holder first).
-    Fifo,
+    /// preempt units from lower-priority holders (least urgent holder first).
+    PreemptivePriority,
 }
 
 /// A seize request: which resource, how many units, at what priority
@@ -161,8 +161,11 @@ impl ResourceController {
             pools: BTreeMap::new(),
             holdings: BTreeMap::new(),
             priorities: BTreeMap::new(),
-            priority_queue: matches!(policy, PreemptPolicy::Priority | PreemptPolicy::Fifo),
-            preemptive: matches!(policy, PreemptPolicy::Fifo),
+            priority_queue: matches!(
+                policy,
+                PreemptPolicy::Priority | PreemptPolicy::PreemptivePriority
+            ),
+            preemptive: matches!(policy, PreemptPolicy::PreemptivePriority),
             waiting: VecDeque::new(),
             wait_graph: WaitForGraph::default(),
             next_request: 0,
@@ -215,9 +218,20 @@ impl ResourceController {
 
     /// Try to seize units for `entity` (all-or-nothing).
     ///
-    /// Under the [`PreemptPolicy::Fifo`] policy, an unsatisfiable request
+    /// Under [`PreemptPolicy::PreemptivePriority`], an unsatisfiable request
     /// may preempt lower-priority holders; the evictions are reported in
     /// the [`SeizeOutcome::Granted`] payload.
+    ///
+    /// Requests never jump ahead of waiters they should queue behind: under
+    /// FIFO, any existing waiter for the resource blocks an immediate grant;
+    /// under the priority policies, only waiters at least as urgent do. This
+    /// prevents starvation of large requests by a stream of small ones.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::InvalidParameter`] if `amount` is zero or exceeds the
+    /// resource's capacity (such a request could never be granted).
+    /// [`ResourceError::UnknownResource`] if the resource is not registered.
     pub fn seize(
         &mut self,
         entity: u64,
@@ -226,11 +240,18 @@ impl ResourceController {
         if request.amount == 0 {
             return Err(ResourceError::InvalidParameter);
         }
-        if !self.pools.contains_key(&request.resource) {
-            return Err(ResourceError::UnknownResource);
+        let capacity = self
+            .pools
+            .get(&request.resource)
+            .ok_or(ResourceError::UnknownResource)?
+            .capacity();
+        if request.amount > capacity {
+            return Err(ResourceError::InvalidParameter);
         }
 
-        if self.try_take(request.resource, request.amount) {
+        if !self.blocked_by_waiters(request.resource, request.priority)
+            && self.try_take(request.resource, request.amount)
+        {
             self.record_hold(entity, request.resource, request.amount);
             return Ok(SeizeOutcome::Granted(Vec::new()));
         }
@@ -238,7 +259,9 @@ impl ResourceController {
         if self.preemptive {
             let evictions = self.preempt_for(entity, &request)?;
             if !evictions.is_empty() {
-                debug_assert!(self.try_take(request.resource, request.amount));
+                // Side effect must run in release builds too: keep it outside the assert.
+                let took = self.try_take(request.resource, request.amount);
+                debug_assert!(took);
                 self.record_hold(entity, request.resource, request.amount);
                 return Ok(SeizeOutcome::Granted(evictions));
             }
@@ -254,8 +277,17 @@ impl ResourceController {
             amount: request.amount,
             priority: request.priority,
         });
-        self.wait_graph.set_request(entity, Some(request.resource));
+        self.wait_graph.add_request(entity, request.resource);
         Ok(SeizeOutcome::Queued(id))
+    }
+
+    /// True if a waiter for `resource` must be served before a new request
+    /// of `priority`: any waiter under FIFO, or one at least as urgent under
+    /// the priority policies.
+    fn blocked_by_waiters(&self, resource: u64, priority: i64) -> bool {
+        self.waiting
+            .iter()
+            .any(|w| w.resource == resource && (!self.priority_queue || w.priority <= priority))
     }
 
     fn try_take(&mut self, resource: u64, amount: usize) -> bool {
@@ -395,7 +427,7 @@ impl ResourceController {
             let w = self.waiting.remove(idx).expect("index from live scan");
             if self.try_take(w.resource, w.amount) {
                 self.record_hold(w.entity, w.resource, w.amount);
-                self.wait_graph.set_request(w.entity, None);
+                self.wait_graph.remove_request(w.entity, w.resource);
                 granted.push(w.entity);
             } else {
                 // Availability was just checked; unreachable in practice.
@@ -410,14 +442,16 @@ impl ResourceController {
     /// still waiting. Pending evictions are unaffected — preemption is
     /// immediate by design.
     pub fn cancel(&mut self, entity: u64, id: RequestId) -> bool {
-        let before = self.waiting.len();
-        self.waiting
-            .retain(|w| !(w.entity == entity && w.id == id.0));
-        let removed = self.waiting.len() < before;
-        if removed && self.waiting.iter().all(|w| w.entity != entity) {
-            self.wait_graph.set_request(entity, None);
-        }
-        removed
+        let Some(idx) = self
+            .waiting
+            .iter()
+            .position(|w| w.entity == entity && w.id == id.0)
+        else {
+            return false;
+        };
+        let w = self.waiting.remove(idx).expect("index from live scan");
+        self.wait_graph.remove_request(entity, w.resource);
+        true
     }
 }
 
@@ -468,7 +502,7 @@ mod tests {
 
     #[test]
     fn preemption_evicts_lower_priority_holder() {
-        let mut rc = ResourceController::with_policy(PreemptPolicy::Fifo);
+        let mut rc = ResourceController::with_policy(PreemptPolicy::PreemptivePriority);
         rc.add_pool(0, 1).unwrap();
         rc.set_priority(1, 10); // low-urgency holder
         rc.set_priority(2, -10); // high-urgency requester
@@ -480,6 +514,29 @@ mod tests {
         }
         assert_eq!(rc.held(1, 0), 0);
         assert_eq!(rc.held(2, 0), 1);
+    }
+
+    /// Regression: the preempting request's take must happen in release
+    /// builds too. Before the fix, the take lived inside `debug_assert!`,
+    /// so release builds left the unit free and a third requester was
+    /// granted the same unit (double grant). Run with `--release` to see it.
+    #[test]
+    fn preemption_take_is_not_skipped_in_release() {
+        let mut rc = ResourceController::with_policy(PreemptPolicy::PreemptivePriority);
+        rc.add_pool(0, 1).unwrap();
+        rc.set_priority(1, 10);
+        rc.set_priority(2, -10);
+        rc.seize(1, SeizeRequest::new(0, 1)).unwrap();
+        assert!(matches!(
+            rc.seize(2, SeizeRequest::new(0, 1)),
+            Ok(SeizeOutcome::Granted(_))
+        ));
+        // The single unit is now held by entity 2, so entity 3 must queue.
+        assert!(matches!(
+            rc.seize(3, SeizeRequest::new(0, 1)),
+            Ok(SeizeOutcome::Queued(_))
+        ));
+        assert_eq!(rc.held(3, 0), 0);
     }
 
     #[test]

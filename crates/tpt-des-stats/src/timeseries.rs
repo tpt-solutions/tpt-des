@@ -6,6 +6,8 @@
 //! * [`autocorrelation`] — lag-k autocorrelation, the batch-means sanity
 //!   check.
 
+use crate::error::StatsError;
+
 /// One-pass running statistics (Welford's algorithm).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RunningStats {
@@ -58,6 +60,7 @@ impl RunningStats {
 /// each change; the average integrates the value over `[first_t, last_t]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TimeWeightedAvg {
+    first_t: f64,
     last_t: f64,
     last_v: f64,
     area: f64,
@@ -71,19 +74,34 @@ impl TimeWeightedAvg {
     }
 
     /// Record the value `v` holding from time `t` onward.
-    pub fn push(&mut self, t: f64, v: f64) {
-        if self.started && t > self.last_t {
+    ///
+    /// # Errors
+    ///
+    /// [`StatsError::NonFinite`] for a NaN/infinite time or value, and
+    /// [`StatsError::OutOfOrder`] if `t` precedes the last recorded time. A
+    /// rejected push leaves the accumulator unchanged.
+    pub fn push(&mut self, t: f64, v: f64) -> Result<(), StatsError> {
+        if !t.is_finite() || !v.is_finite() {
+            return Err(StatsError::NonFinite);
+        }
+        if self.started && t < self.last_t {
+            return Err(StatsError::OutOfOrder);
+        }
+        if !self.started {
+            self.first_t = t;
+        } else {
             self.area += self.last_v * (t - self.last_t);
         }
         self.last_t = t;
         self.last_v = v;
         self.started = true;
+        Ok(())
     }
 
     /// The time-weighted average over the observed window (0 for an empty
     /// or single-point window).
     pub fn average(&self) -> f64 {
-        if !self.started || self.last_t <= 0.0 && self.area == 0.0 {
+        if !self.started {
             return 0.0;
         }
         let span = self.window();
@@ -94,9 +112,13 @@ impl TimeWeightedAvg {
         }
     }
 
-    /// Length of the observed window.
+    /// Length of the observed window, from the first push to the last.
     pub fn window(&self) -> f64 {
-        self.last_t
+        if self.started {
+            self.last_t - self.first_t
+        } else {
+            0.0
+        }
     }
 
     /// Integral of the value over time (utilization bounds, area metrics).
@@ -149,10 +171,10 @@ mod tests {
     fn time_weighted_average_is_exact() {
         let mut twa = TimeWeightedAvg::new();
         // Queue length: 0 from t=0, 2 from t=1, 5 from t=3, 0 from t=8.
-        twa.push(0.0, 0.0);
-        twa.push(1.0, 2.0);
-        twa.push(3.0, 5.0);
-        twa.push(8.0, 0.0);
+        twa.push(0.0, 0.0).unwrap();
+        twa.push(1.0, 2.0).unwrap();
+        twa.push(3.0, 5.0).unwrap();
+        twa.push(8.0, 0.0).unwrap();
         // Integral: 2·2 + 5·5 = 29 over [0, 8].
         assert!(close(twa.integral(), 29.0, 1e-12));
         assert!(close(twa.average(), 29.0 / 8.0, 1e-12));

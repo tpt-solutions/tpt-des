@@ -50,9 +50,9 @@ impl ResourcePool {
         self.available
     }
 
-    /// Long-run utilization bookkeeping aid: held fraction right now.
+    /// Fraction of capacity currently held (`1 − available / capacity`).
     pub fn held_fraction(&self) -> f64 {
-        self.available as f64 / self.capacity as f64
+        1.0 - self.available as f64 / self.capacity as f64
     }
 
     /// Try to take `n` units; all-or-nothing.

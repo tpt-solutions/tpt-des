@@ -46,10 +46,13 @@ impl Store {
 
     /// Put `n` items; returns the number accepted (capped at capacity).
     pub fn put(&mut self, n: i64) -> i64 {
-        let accepted = match self.capacity {
-            Some(cap) => n.min(cap - self.level).max(0),
-            None => n.max(0),
+        // Room left before the level would exceed capacity (or i64::MAX),
+        // so the addition below can never overflow.
+        let room = match self.capacity {
+            Some(cap) => cap - self.level,
+            None => i64::MAX - self.level,
         };
+        let accepted = n.clamp(0, room);
         self.level += accepted;
         accepted
     }
@@ -109,6 +112,10 @@ impl Buffer {
     /// Pour `amount` in; returns the accepted amount (overflow is refused,
     /// not lost silently — the caller sees the shortfall).
     pub fn pour(&mut self, amount: f64) -> f64 {
+        // NaN is refused outright rather than poisoning the level.
+        if amount.is_nan() {
+            return 0.0;
+        }
         let accepted = amount.clamp(0.0, self.capacity - self.level);
         self.level += accepted;
         accepted
@@ -116,6 +123,9 @@ impl Buffer {
 
     /// Drain up to `amount`; returns what was actually taken.
     pub fn drain(&mut self, amount: f64) -> f64 {
+        if amount.is_nan() {
+            return 0.0;
+        }
         let taken = amount.clamp(0.0, self.level);
         self.level -= taken;
         taken
@@ -124,7 +134,7 @@ impl Buffer {
     /// Duration to pour `amount` at `rate` given the free space, or `None`
     /// if the rate is non-positive or the buffer can never absorb it.
     pub fn pour_duration(&self, amount: f64, rate: f64) -> Option<f64> {
-        if rate <= 0.0 || rate.is_nan() {
+        if rate <= 0.0 || rate.is_nan() || amount.is_nan() {
             return None;
         }
         let accepted = amount.min(self.capacity - self.level);
@@ -137,7 +147,7 @@ impl Buffer {
 
     /// Duration to drain `amount` at `rate` given the current level.
     pub fn drain_duration(&self, amount: f64, rate: f64) -> Option<f64> {
-        if rate <= 0.0 || rate.is_nan() {
+        if rate <= 0.0 || rate.is_nan() || amount.is_nan() {
             return None;
         }
         let taken = amount.min(self.level);

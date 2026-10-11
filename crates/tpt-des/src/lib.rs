@@ -23,6 +23,8 @@
 //! Simulate an M/M/1 queue and compare against the analytical formula:
 //!
 //! ```
+//! # #[cfg(all(feature = "queue", feature = "std"))]
+//! # fn main() {
 //! use tpt_des::queue::{run_queue, mm1, Discipline, Exponential, QueueConfig};
 //!
 //! let (lambda, mu) = (0.5, 1.0);
@@ -32,6 +34,7 @@
 //!         service: Box::new(Exponential::new(mu).unwrap()),
 //!         discipline: Discipline::Fifo,
 //!         capacity: None,
+//!         priority: None,
 //!     },
 //!     20_000.0,
 //!     2_000.0,
@@ -39,16 +42,24 @@
 //! );
 //! let exact = mm1(lambda, mu).unwrap();
 //! assert!((metrics.mean_sojourn() - exact.w).abs() / exact.w < 0.25);
+//! # }
+//! # #[cfg(not(all(feature = "queue", feature = "std")))]
+//! # fn main() {}
 //! ```
 //!
 //! Markov chain steady state:
 //!
 //! ```
+//! # #[cfg(all(feature = "markov", feature = "std"))]
+//! # fn main() {
 //! use tpt_des::markov::Dtmc;
 //!
 //! let chain = Dtmc::from_rows(vec![vec![0.9, 0.1], vec![0.5, 0.5]]).unwrap();
 //! let pi = chain.stationary(1e-12, 10_000).unwrap();
 //! assert!((pi[0] - 5.0 / 6.0).abs() < 1e-9);
+//! # }
+//! # #[cfg(not(all(feature = "markov", feature = "std")))]
+//! # fn main() {}
 //! ```
 
 #![cfg_attr(not(feature = "core"), deny(unknown_lints))]

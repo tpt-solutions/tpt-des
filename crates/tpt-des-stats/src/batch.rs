@@ -1,6 +1,7 @@
 //! Output analysis: batch means, replication/deletion, regenerative methods.
 
 use crate::ci;
+use crate::error::{check_confidence, StatsError};
 
 /// Batch-means analysis of one long run.
 #[derive(Clone, Debug, PartialEq)]
@@ -20,20 +21,28 @@ pub struct BatchMeans {
 ///
 /// The batch count trades bias (batches too short retain correlation)
 /// against variance (too few batches); a classic default is 20–30 batches.
-#[must_use]
-pub fn batch_means(series: &[f64], n_batches: usize, confidence: f64) -> BatchMeans {
+///
+/// # Errors
+///
+/// [`StatsError::InsufficientData`] if `series` has fewer observations than
+/// batches (some batch would be empty), plus the interval's own errors.
+pub fn batch_means(
+    series: &[f64],
+    n_batches: usize,
+    confidence: f64,
+) -> Result<BatchMeans, StatsError> {
+    check_confidence(confidence)?;
     let n_batches = n_batches.max(2);
     let len = series.len();
     let batch_len = len / n_batches;
-    let usable = batch_len * n_batches;
-    let mut batch_means = Vec::with_capacity(n_batches);
-    if batch_len > 0 {
-        for b in 0..n_batches {
-            let chunk = &series[b * batch_len..(b + 1) * batch_len];
-            batch_means.push(chunk.iter().sum::<f64>() / batch_len as f64);
-        }
+    if batch_len == 0 {
+        return Err(StatsError::InsufficientData);
     }
-    let _ = usable;
+    let mut batch_means = Vec::with_capacity(n_batches);
+    for b in 0..n_batches {
+        let chunk = &series[b * batch_len..(b + 1) * batch_len];
+        batch_means.push(chunk.iter().sum::<f64>() / batch_len as f64);
+    }
     let grand_mean = batch_means.iter().sum::<f64>() / batch_means.len().max(1) as f64;
     let k = batch_means.len();
     let batch_variance = if k > 1 {
@@ -45,13 +54,13 @@ pub fn batch_means(series: &[f64], n_batches: usize, confidence: f64) -> BatchMe
     } else {
         0.0
     };
-    let ci = ci::mean_of_samples_ci(&batch_means, confidence);
-    BatchMeans {
+    let ci = ci::mean_of_samples_ci(&batch_means, confidence)?;
+    Ok(BatchMeans {
         batch_means,
         grand_mean,
         batch_variance,
         ci,
-    }
+    })
 }
 
 /// Replication/deletion result.
@@ -69,12 +78,16 @@ pub struct ReplicationDeletion {
 /// replication (warm-up), average the rest per replication, then form a
 /// confidence interval across the independent replication means — the
 /// statistically cleanest interval because replications are independent.
-#[must_use]
+///
+/// # Errors
+///
+/// Needs at least two replications that survive deletion; see
+/// [`ci::mean_of_samples_ci`].
 pub fn replication_deletion(
     replications: &[Vec<f64>],
     delete: usize,
     confidence: f64,
-) -> ReplicationDeletion {
+) -> Result<ReplicationDeletion, StatsError> {
     let means: Vec<f64> = replications
         .iter()
         .filter_map(|r| {
@@ -85,11 +98,12 @@ pub fn replication_deletion(
             }
         })
         .collect();
-    ReplicationDeletion {
-        mean: means.iter().sum::<f64>() / means.len().max(1) as f64,
-        ci: ci::mean_of_samples_ci(&means, confidence),
+    let ci = ci::mean_of_samples_ci(&means, confidence)?;
+    Ok(ReplicationDeletion {
+        mean: means.iter().sum::<f64>() / means.len() as f64,
+        ci,
         replications: means.len(),
-    }
+    })
 }
 
 /// Regenerative (cycle) ratio estimator.
@@ -107,11 +121,27 @@ pub struct Regenerative {
 /// quantity summed over cycle `i`, `τ_i` its duration. The ratio estimator
 /// `ΣZ/Στ` is strongly consistent; the interval uses the delta method with
 /// Student-t across cycles.
-#[must_use]
-pub fn regenerative(cycle_sums: &[f64], cycle_lengths: &[f64], confidence: f64) -> Regenerative {
+///
+/// # Errors
+///
+/// [`StatsError::EmptySample`] with no complete cycle,
+/// [`StatsError::InvalidParameter`] if the total cycle length is not positive,
+/// [`StatsError::InvalidConfidence`] outside `(0, 1)`.
+pub fn regenerative(
+    cycle_sums: &[f64],
+    cycle_lengths: &[f64],
+    confidence: f64,
+) -> Result<Regenerative, StatsError> {
+    check_confidence(confidence)?;
     let n = cycle_sums.len().min(cycle_lengths.len());
+    if n == 0 {
+        return Err(StatsError::EmptySample);
+    }
     let sum_z: f64 = cycle_sums[..n].iter().sum();
     let sum_t: f64 = cycle_lengths[..n].iter().sum();
+    if !sum_t.is_finite() || sum_t <= 0.0 {
+        return Err(StatsError::InvalidParameter);
+    }
     let mean = sum_z / sum_t;
 
     // Per-cycle i.i.d. contributions for the delta-method interval:
@@ -128,11 +158,11 @@ pub fn regenerative(cycle_sums: &[f64], cycle_lengths: &[f64], confidence: f64) 
     } else {
         f64::INFINITY
     };
-    Regenerative {
+    Ok(Regenerative {
         mean,
         ci: (mean - half_width, mean + half_width),
         cycles: n,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -146,7 +176,7 @@ mod tests {
     #[test]
     fn batch_means_of_constant_series() {
         let series = vec![2.5; 1000];
-        let bm = batch_means(&series, 20, 0.95);
+        let bm = batch_means(&series, 20, 0.95).unwrap();
         assert!(close(bm.grand_mean, 2.5, 1e-12));
         assert!(close(bm.batch_variance, 0.0, 1e-24));
         // Degenerate interval collapses to the constant.
@@ -158,7 +188,7 @@ mod tests {
     #[test]
     fn batch_means_grand_mean_matches_manual() {
         let series: Vec<f64> = (0..1000).map(|i| i as f64).collect();
-        let bm = batch_means(&series, 10, 0.95);
+        let bm = batch_means(&series, 10, 0.95).unwrap();
         assert!(close(bm.grand_mean, 499.5, 1e-9));
         // Batches are equal-width means of a ramp: 49.5, 149.5, …
         assert!(close(bm.batch_means[0], 49.5, 1e-9));
@@ -171,7 +201,7 @@ mod tests {
             vec![100.0, 0.1, 0.2, 0.3, 0.4],
             vec![100.0, 0.5, 0.6, 0.7, 0.8],
         ];
-        let rd = replication_deletion(&reps, 1, 0.95);
+        let rd = replication_deletion(&reps, 1, 0.95).unwrap();
         assert_eq!(rd.replications, 2);
         assert!(close(rd.mean, 0.45, 1e-12));
         assert!(rd.ci.0 <= rd.mean && rd.mean <= rd.ci.1);
@@ -180,7 +210,7 @@ mod tests {
     #[test]
     fn regenerative_ratio_estimator() {
         // Cycles: (Z, τ): mean = ΣZ/Στ = 20/10 = 2.
-        let rd = regenerative(&[1.0, 4.0, 6.0, 9.0], &[1.0, 2.0, 3.0, 4.0], 0.95);
+        let rd = regenerative(&[1.0, 4.0, 6.0, 9.0], &[1.0, 2.0, 3.0, 4.0], 0.95).unwrap();
         assert!(close(rd.mean, 2.0, 1e-12));
         assert!(rd.ci.0 < rd.mean && rd.mean < rd.ci.1);
     }

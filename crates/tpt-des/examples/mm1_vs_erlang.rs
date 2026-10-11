@@ -14,6 +14,7 @@ fn main() {
             service: Box::new(Exponential::new(mu).unwrap()),
             discipline: Discipline::Fifo,
             capacity: None,
+            priority: None,
         },
         100_000.0,
         10_000.0,

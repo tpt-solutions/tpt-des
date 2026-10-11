@@ -30,7 +30,16 @@ confidence-threshold = 0.9
 
 [bans]
 multiple-versions = "warn"
-wildcards = "allow"
+# Every dependency must carry a version requirement; `*` would float.
+wildcards = "deny"
+# Apache-2.0-only numerics crates are excluded by ecosystem policy (see the
+# header). Denying them here makes an accidental pull a hard failure.
+deny = [
+    { name = "nalgebra" },
+    { name = "clarabel" },
+    { name = "faer" },
+    { name = "statrs" },
+]
 
 [sources]
 unknown-registry = "deny"

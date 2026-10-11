@@ -15,6 +15,7 @@ fn mm1_config(lambda: f64, mu: f64, discipline: Discipline) -> QueueConfig {
         service: Box::new(Exponential::new(mu).unwrap()),
         discipline,
         capacity: None,
+        priority: None,
     }
 }
 
@@ -110,12 +111,14 @@ fn processor_sharing_matches_mm1_mean_sojourn() {
 }
 
 #[test]
-fn fifo_lifo_priority_agree_on_mean_sojourn() {
-    // For M/M/1 with a single priority class, all non-preemptive disciplines
-    // share the same mean sojourn time (conservation law).
+fn fifo_lifo_agree_on_mean_sojourn() {
+    // For M/M/1 with a single class, every work-conserving non-preemptive
+    // discipline shares the same mean sojourn time (conservation law).
+    // Priority is checked separately: with one class it is FIFO, and with
+    // several classes it must differ per class (see tests/regressions.rs).
     let (lambda, mu) = (0.6, 1.0);
     let exact = mm1(lambda, mu).unwrap();
-    for d in [Discipline::Fifo, Discipline::Lifo, Discipline::Priority] {
+    for d in [Discipline::Fifo, Discipline::Lifo] {
         let m = run_queue(mm1_config(lambda, mu, d), 40_000.0, 4_000.0, 11);
         assert!(
             (m.mean_sojourn() - exact.w).abs() / exact.w < 0.25,

@@ -3,7 +3,7 @@
 //! The chain itself is stored as a `tpt-math-prob-markov::MarkovChain`
 //! (plain `Vec<Vec<f64>>` rows, simulation-ready), while the numerical
 //! analysis (power iteration for the stationary distribution) runs on the
-//! in-house [`DMatrix`](tpt_math_linalg_dense::DMatrix).
+//! in-house [`DMatrix`].
 
 use crate::error::MarkovError;
 use alloc::vec::Vec;
@@ -125,9 +125,20 @@ impl Dtmc {
         DMatrix::from_row_slice(n, n, &data)
     }
 
-    /// Steady-state probabilities via power iteration on the `DMatrix`
-    /// form: iterate `v ← Pᵀv`, renormalizing in L1 until the L1 change is
-    /// below `tol` (or `max_iter` is hit, yielding [`MarkovError::NotConvergent`]).
+    /// Steady-state probabilities `π` with `πP = π` and `Σπ = 1`.
+    ///
+    /// Solved directly: the last balance equation is replaced by the
+    /// normalization constraint and the system is solved. Unlike power
+    /// iteration this converges for periodic chains, where iterates
+    /// oscillate forever.
+    ///
+    /// * `tol` bounds the residual `‖πP − π‖₁`; if the solve misses it,
+    ///   [`MarkovError::NotConvergent`] is returned.
+    /// * `max_iter` is accepted for signature compatibility; the direct solve
+    ///   does not iterate.
+    ///
+    /// A reducible chain has no unique stationary distribution and yields
+    /// [`MarkovError::Singular`].
     ///
     /// # Examples
     ///
@@ -142,21 +153,39 @@ impl Dtmc {
     /// assert!((pi[0] + pi[1] - 1.0).abs() < 1e-12);
     /// ```
     pub fn stationary(&self, tol: f64, max_iter: usize) -> Result<Vec<f64>, MarkovError> {
+        let _ = max_iter;
+        if tol.is_nan() || tol < 0.0 {
+            return Err(MarkovError::InvalidTolerance);
+        }
         let n = self.len();
         let p = self.as_dmatrix();
-        let pt = p.transpose();
-        let mut v = DVector::from_fn(n, |_| 1.0 / n as f64);
-        for _ in 0..max_iter {
-            let next = pt.clone() * v.clone();
-            let l1: f64 = next.iter().sum();
-            let normalized = DVector::from_fn(n, |i| next[i] / l1);
-            let delta: f64 = (0..n).map(|i| (normalized[i] - v[i]).abs()).sum();
-            v = normalized;
-            if delta < tol {
-                return Ok((0..n).map(|i| v[i]).collect());
+        // (Pᵀ − I) π = 0, with the last equation replaced by Σπ = 1.
+        let a = DMatrix::from_fn(n, n, |i, j| {
+            if i == n - 1 {
+                1.0
+            } else {
+                p[(j, i)] - if i == j { 1.0 } else { 0.0 }
             }
+        });
+        let b = DVector::from_fn(n, |i| if i == n - 1 { 1.0 } else { 0.0 });
+        let solution = a.solve(&b).map_err(|_| MarkovError::Singular)?;
+        let pi: Vec<f64> = (0..n).map(|i| solution[i]).collect();
+
+        // The residual ‖πP − π‖₁ must be within tolerance; a non-finite or
+        // clearly negative entry means no valid distribution was produced.
+        let residual: f64 = (0..n)
+            .map(|j| {
+                let flow: f64 = (0..n).map(|i| pi[i] * p[(i, j)]).sum();
+                (flow - pi[j]).abs()
+            })
+            .sum();
+        if !residual.is_finite()
+            || residual > tol
+            || pi.iter().any(|&x| !x.is_finite() || x < -1e-9)
+        {
+            return Err(MarkovError::NotConvergent);
         }
-        Err(MarkovError::NotConvergent)
+        Ok(pi.iter().map(|&x| x.max(0.0)).collect())
     }
 }
 
@@ -177,16 +206,15 @@ mod tests {
     }
 
     #[test]
-    fn identity_chain_stationary_is_uniform() {
+    fn identity_chain_is_reducible_and_has_no_unique_stationary() {
+        // Every state is absorbing, so any distribution is stationary and
+        // none is unique: the direct solve reports Singular.
         let n = 5;
         let rows = (0..n)
             .map(|i| (0..n).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
             .collect();
         let chain = Dtmc::from_rows(rows).unwrap();
-        let pi = chain.stationary(1e-14, 10_000).unwrap();
-        for p in pi {
-            assert!(close(p, 0.2, 1e-12));
-        }
+        assert_eq!(chain.stationary(1e-14, 10_000), Err(MarkovError::Singular));
     }
 
     #[test]

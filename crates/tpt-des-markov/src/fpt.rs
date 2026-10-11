@@ -27,11 +27,8 @@ pub fn mean_first_passage(dtmc: &Dtmc, target: usize) -> Result<Vec<f64>, Markov
     }
     // Only states with a directed path to the target participate; a closed
     // class elsewhere would make the system singular.
-    let solvable: Vec<usize> = others
-        .iter()
-        .copied()
-        .filter(|&s| can_reach(dtmc, s, target))
-        .collect();
+    let reaches = states_reaching(dtmc, target);
+    let solvable: Vec<usize> = others.iter().copied().filter(|&s| reaches[s]).collect();
     let k = solvable.len();
 
     let mut result = vec![f64::INFINITY; n];
@@ -51,9 +48,9 @@ pub fn mean_first_passage(dtmc: &Dtmc, target: usize) -> Result<Vec<f64>, Markov
     let identity = DMatrix::from_diagonal(&DVector::from_fn(k, |_| 1.0));
     let system = identity - q;
     let ones = DVector::from_fn(k, |_| 1.0);
-    let solution = system
-        .solve(&ones)
-        .map_err(|_| MarkovError::NotConvergent)?;
+    // Singular (I − Q̃) means the target is not reached with probability one
+    // from some solvable state.
+    let solution = system.solve(&ones).map_err(|_| MarkovError::Singular)?;
 
     for (idx, &state) in solvable.iter().enumerate() {
         result[state] = solution[idx];
@@ -71,29 +68,24 @@ pub fn mean_recurrence_times(stationary: &[f64]) -> Vec<f64> {
 }
 
 /// Directed reachability over the support of `P` (BFS).
-fn can_reach(dtmc: &Dtmc, from: usize, to: usize) -> bool {
-    if from == to {
-        return true;
-    }
+/// For every state, whether it has a directed path to `target`: one reverse
+/// BFS from the target, O(n²) on the dense matrix. (A forward search from each
+/// state, as before, cost O(n³).)
+fn states_reaching(dtmc: &Dtmc, target: usize) -> Vec<bool> {
     let n = dtmc.len();
-    let mut visited = alloc::vec![false; n];
+    let mut reaches = alloc::vec![false; n];
     let mut queue = alloc::collections::VecDeque::new();
-    visited[from] = true;
-    queue.push_back(from);
+    reaches[target] = true;
+    queue.push_back(target);
     while let Some(node) = queue.pop_front() {
-        let successors: alloc::vec::Vec<usize> =
-            (0..n).filter(|&j| dtmc.p(node, j) > 0.0).collect();
-        for next in successors {
-            if !visited[next] {
-                if next == to {
-                    return true;
-                }
-                visited[next] = true;
-                queue.push_back(next);
+        for (pred, reached) in reaches.iter_mut().enumerate() {
+            if !*reached && dtmc.p(pred, node) > 0.0 {
+                *reached = true;
+                queue.push_back(pred);
             }
         }
     }
-    false
+    reaches
 }
 
 #[cfg(test)]

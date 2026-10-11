@@ -1,7 +1,7 @@
 # tpt-des
 
-A pure-Rust, AI-native **discrete event simulation (DES)** and stochastic
-systems library: event scheduling, queuing theory, Petri nets, Markov
+A pure-Rust **discrete event simulation (DES)** and stochastic systems
+library: event scheduling, queuing theory, Petri nets, Markov
 chains, resource contention, process-oriented simulation, and rigorous
 output statistics — **no C/C++ FFI and no external solvers**.
 
@@ -18,11 +18,14 @@ Part of the TPT ecosystem; numeric substrate is
 - **Type-state & temporal safety.** Phantom-typed time units (`Ticks`,
   `Seconds`, `Hours`), compile-time event priorities (`const` generics),
   and `const`-capacity resource pools.
-- **Native formal verification.** Kani bounded model checks prove event
-  calendar heap ordering, entity conservation, and Markov probability-mass
-  invariants; `proptest` verifies stochastic laws statistically.
-- **`no_std`-friendly core.** `tpt-des-core` builds for
-  `thumbv6m-none-eabi` with `alloc` only.
+- **Formal verification, in two layers.** Kani bounded model-checking
+  harnesses cover event-calendar ordering, entity conservation, Markov
+  probability mass, Petri token conservation, and deadlock freedom for acyclic
+  wait graphs (run with `just kani`; non-blocking in CI). `proptest` checks
+  stochastic laws statistically.
+- **`no_std`-friendly core.** `tpt-des-core` builds with
+  `--no-default-features` for `thumbv6m-none-eabi` and
+  `wasm32-unknown-unknown`. The other crates require `std`.
 
 ## Crates
 
@@ -50,6 +53,7 @@ let metrics = run_queue(
         service: Box::new(Exponential::new(1.0).unwrap()),
         discipline: Discipline::Fifo,
         capacity: None,
+        priority: None,
     },
     100_000.0, // horizon
     10_000.0,  // warm-up

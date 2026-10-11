@@ -23,5 +23,8 @@ extern crate alloc;
 pub mod batch;
 pub mod ci;
 pub mod dist;
+pub mod error;
 pub mod timeseries;
 pub mod warmup;
+
+pub use error::StatsError;

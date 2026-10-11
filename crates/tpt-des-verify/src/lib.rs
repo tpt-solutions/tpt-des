@@ -9,7 +9,7 @@
 //! * Calendar property tests — statistical verification that pops come out in
 //!   `(time, priority, sequence)` order, cancelled events never fire, and the
 //!   live-count bookkeeping is exact (see the `tests` in this crate).
-//! * Kani bounded model checks (module [`proofs`], compiled only under
+//! * Kani bounded model checks (module `proofs`, compiled only under
 //!   `cfg(kani)`) — machine-checked proofs of the same invariants for small
 //!   symbolic schedules. Run with `cargo kani -p tpt-des-verify`.
 //!

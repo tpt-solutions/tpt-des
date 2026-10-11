@@ -97,11 +97,14 @@ impl JacksonNetwork {
         let solution = matrix
             .solve(&gamma)
             .map_err(|_| QueueError::NoTrafficSolution)?;
+        // Rounding can leave a zero-rate node at about −1e-15. Only a
+        // negative beyond that scale means the system has no valid solution.
+        let scale = self.external.iter().fold(1.0f64, |m, &g| m.max(g.abs()));
         let rates: Vec<f64> = solution.iter().copied().collect();
-        if rates.iter().any(|&l| !l.is_finite() || l < 0.0) {
+        if rates.iter().any(|&l| !l.is_finite() || l < -1e-9 * scale) {
             return Err(QueueError::NoTrafficSolution);
         }
-        Ok(rates)
+        Ok(rates.into_iter().map(|l| l.max(0.0)).collect())
     }
 
     /// Per-node utilization `ρ_i = λ_i / μ_i`.

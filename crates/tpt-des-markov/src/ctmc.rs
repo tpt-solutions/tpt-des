@@ -23,6 +23,11 @@ impl Ctmc {
     /// tolerance. The diagonal is recomputed exactly as `−rowsum`, so tiny
     /// row-sum residues cannot accumulate.
     pub fn new(rows: &[Vec<f64>], tolerance: f64) -> Result<Self, MarkovError> {
+        // `!(x >= 0)` also rejects NaN, which would otherwise disable the
+        // row-sum check below.
+        if tolerance.is_nan() || tolerance < 0.0 {
+            return Err(MarkovError::InvalidTolerance);
+        }
         let n = rows.len();
         if n == 0 {
             return Err(MarkovError::Empty);
@@ -36,7 +41,8 @@ impl Ctmc {
                     return Err(MarkovError::InvalidGenerator);
                 }
             }
-            if row_sum(row).abs() > tolerance {
+            let residue = row_sum(row).abs();
+            if residue.is_nan() || residue > tolerance {
                 return Err(MarkovError::InvalidGenerator);
             }
         }
@@ -92,7 +98,9 @@ impl Ctmc {
         let qt = self.q.transpose();
         let a = DMatrix::from_fn(n, n, |i, j| if i == n - 1 { 1.0 } else { qt[(i, j)] });
         let b = DVector::from_fn(n, |i| if i == n - 1 { 1.0 } else { 0.0 });
-        let solution = a.solve(&b).map_err(|_| MarkovError::NotConvergent)?;
+        // A failed solve means no unique solution, i.e. the chain is
+        // reducible: report that rather than a convergence failure.
+        let solution = a.solve(&b).map_err(|_| MarkovError::Singular)?;
         let pi: Vec<f64> = (0..n).map(|i| solution[i]).collect();
         let total: f64 = pi.iter().sum();
         if !total.is_finite() || (total - 1.0).abs() > 1e-6 || pi.iter().any(|&p| p < -1e-9) {
@@ -123,9 +131,15 @@ fn row_sum(row: &[f64]) -> f64 {
 
 /// Matrix exponential `exp(A)` by scaling and squaring with a 24-term
 /// Taylor series (near machine precision for generator-matrix norms).
+///
+/// Scaling uses the induced infinity norm (maximum absolute row sum), the
+/// norm the Taylor truncation bound is stated in. A max-entry norm
+/// understates large matrices and can leave the series under-scaled.
 pub fn matrix_exponential(a: &DMatrix) -> DMatrix {
     let n = a.nrows();
-    let norm = a.iter().fold(0.0f64, |m, &x| m.max(x.abs()));
+    let norm = (0..n)
+        .map(|i| (0..n).map(|j| a[(i, j)].abs()).sum::<f64>())
+        .fold(0.0f64, f64::max);
     let mut squarings = 0u32;
     let mut scale = 1.0f64;
     while norm / scale > 0.25 {
@@ -135,8 +149,6 @@ pub fn matrix_exponential(a: &DMatrix) -> DMatrix {
     let small = a.clone() * (1.0 / scale);
 
     // Taylor series: Σ Aᵏ/k!
-    let one = |v: f64| v;
-    let _ = one;
     let identity = DMatrix::from_diagonal(&DVector::from_fn(n, |_| 1.0));
     let mut sum = identity.clone();
     let mut term = identity;

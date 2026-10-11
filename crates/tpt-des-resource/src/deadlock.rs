@@ -7,7 +7,7 @@
 //! The model: entities *hold* units of resources and *wait for* resources.
 //! A wait-for edge `e₁ → e₂` exists when `e₁` waits for a resource that `e₂`
 //! holds. A deadlock is exactly a cycle in the wait-for graph, and
-//! [`wait_for_cycles`] returns one such cycle (the involved entities) if one
+//! [`WaitForGraph::find_cycle`] returns one such cycle (the involved entities) if one
 //! exists.
 //!
 //! # Examples
@@ -42,8 +42,10 @@ pub type ResourceId = u64;
 pub struct WaitForGraph {
     /// resource → set of entities currently holding ≥ 1 unit of it.
     holders: BTreeMap<ResourceId, BTreeSet<EntityId>>,
-    /// entity → resource it is waiting for (`None` = running).
-    waiting_for: BTreeMap<EntityId, Option<ResourceId>>,
+    /// entity → resource → number of outstanding queued requests for it.
+    /// An entity may have several queued requests at once (on different
+    /// resources, or the same one), so each edge is counted.
+    waiting_for: BTreeMap<EntityId, BTreeMap<ResourceId, usize>>,
 }
 
 impl WaitForGraph {
@@ -60,29 +62,65 @@ impl WaitForGraph {
             .is_some_and(|set| set.remove(&entity))
     }
 
-    /// Set (or clear with `None`) the resource `entity` is waiting for.
+    /// Replace all of `entity`'s waits with a single wait on `resource`
+    /// (`None` = running, waiting on nothing).
     pub fn set_request(&mut self, entity: EntityId, resource: Option<ResourceId>) {
-        self.waiting_for.insert(entity, resource);
+        self.waiting_for.remove(&entity);
+        if let Some(resource) = resource {
+            self.add_request(entity, resource);
+        }
     }
 
-    /// The resource `entity` is waiting for, if any.
+    /// Record one more queued request by `entity` for `resource`.
+    pub fn add_request(&mut self, entity: EntityId, resource: ResourceId) {
+        *self
+            .waiting_for
+            .entry(entity)
+            .or_default()
+            .entry(resource)
+            .or_insert(0) += 1;
+    }
+
+    /// Withdraw one queued request by `entity` for `resource`. Returns true
+    /// if one was outstanding.
+    pub fn remove_request(&mut self, entity: EntityId, resource: ResourceId) -> bool {
+        let Some(resources) = self.waiting_for.get_mut(&entity) else {
+            return false;
+        };
+        let Some(count) = resources.get_mut(&resource) else {
+            return false;
+        };
+        *count -= 1;
+        if *count == 0 {
+            resources.remove(&resource);
+        }
+        if resources.is_empty() {
+            self.waiting_for.remove(&entity);
+        }
+        true
+    }
+
+    /// The lowest-numbered resource `entity` is waiting for, if any.
     pub fn waiting_for(&self, entity: EntityId) -> Option<ResourceId> {
-        self.waiting_for.get(&entity).copied().flatten()
+        self.waiting_for
+            .get(&entity)
+            .and_then(|resources| resources.keys().next().copied())
     }
 
     /// The wait-for adjacency: entity → entities it is blocked on.
     pub fn adjacency(&self) -> BTreeMap<EntityId, BTreeSet<EntityId>> {
         let mut adj: BTreeMap<EntityId, BTreeSet<EntityId>> = BTreeMap::new();
-        for (&entity, &waiting) in &self.waiting_for {
-            let Some(resource) = waiting else { continue };
-            let blocked_on = self.holders.get(&resource).cloned().unwrap_or_default();
-            // A holder is never blocked on itself.
-            blocked_on
-                .into_iter()
-                .filter(|&holder| holder != entity)
-                .for_each(|holder| {
-                    adj.entry(entity).or_default().insert(holder);
-                });
+        for (&entity, resources) in &self.waiting_for {
+            for &resource in resources.keys() {
+                let blocked_on = self.holders.get(&resource).cloned().unwrap_or_default();
+                // A holder is never blocked on itself.
+                blocked_on
+                    .into_iter()
+                    .filter(|&holder| holder != entity)
+                    .for_each(|holder| {
+                        adj.entry(entity).or_default().insert(holder);
+                    });
+            }
         }
         adj
     }

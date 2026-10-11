@@ -36,7 +36,6 @@
 use crate::entity::EntityId;
 use crate::time::Time;
 use alloc::collections::{BTreeSet, BinaryHeap};
-use alloc::vec::Vec;
 use core::fmt;
 use core::marker::PhantomData;
 
@@ -239,23 +238,18 @@ impl<Unit, E> EventCalendar<Unit, E> {
 
     /// Time of the next live (non-cancelled) event, without consuming it.
     ///
-    /// Peeks past tombstones by temporarily popping; still amortized
-    /// `O(log n)`.
+    /// Discards tombstones that have surfaced at the top of the heap (and
+    /// forgets their ids, keeping [`live_len`](Self::live_len) consistent);
+    /// amortized `O(log n)`.
     pub fn next_time(&mut self) -> Option<f64> {
-        let mut held: Vec<HeapEntry<E>> = Vec::new();
-        let mut result = None;
-        while let Some(entry) = self.heap.pop() {
-            if self.cancelled.contains(&entry.id) {
-                continue; // tombstone: discard
+        while let Some(entry) = self.heap.peek() {
+            if self.cancelled.remove(&entry.id) {
+                self.heap.pop(); // tombstone: discard
+                continue;
             }
-            result = Some(entry.time);
-            held.push(entry);
-            break;
+            return Some(entry.time);
         }
-        for entry in held {
-            self.heap.push(entry);
-        }
-        result
+        None
     }
 
     /// Like [`pop`](Self::pop), but never returns events scheduled after
@@ -263,11 +257,10 @@ impl<Unit, E> EventCalendar<Unit, E> {
     /// heap. Used by `Simulation::run_until` to bound a run in time.
     pub fn pop_until(&mut self, max_time: f64) -> Option<Popped<E>> {
         loop {
-            let entry = self.heap.pop()?;
-            if entry.time > max_time {
-                self.heap.push(entry);
+            if self.heap.peek()?.time > max_time {
                 return None;
             }
+            let entry = self.heap.pop()?;
             if self.cancelled.remove(&entry.id) {
                 continue; // tombstone: discard lazily
             }
@@ -287,12 +280,37 @@ impl<Unit, E> EventCalendar<Unit, E> {
 mod tests {
     use super::*;
     use crate::time::Ticks;
+    use alloc::vec::Vec;
 
     fn cal() -> EventCalendar<Ticks, u64> {
         EventCalendar::new()
     }
 
     const A: EntityId = EntityId(0);
+
+    #[test]
+    fn next_time_after_cancel_keeps_live_len_consistent() {
+        let mut c = cal();
+        let a = c.schedule_at::<0>(Time::from_raw(1.0), A, 1);
+        c.schedule_at::<0>(Time::from_raw(2.0), A, 2);
+        assert!(c.cancel(a));
+        assert_eq!(c.next_time(), Some(2.0));
+        assert_eq!(c.live_len(), 1); // used to underflow after next_time
+        assert_eq!(c.pop().unwrap().payload, 2);
+        assert!(c.is_empty());
+        assert_eq!(c.next_time(), None);
+    }
+
+    #[test]
+    fn pop_until_respects_horizon_without_losing_events() {
+        let mut c = cal();
+        c.schedule_at::<0>(Time::from_raw(1.0), A, 1);
+        c.schedule_at::<0>(Time::from_raw(5.0), A, 5);
+        assert_eq!(c.pop_until(2.0).unwrap().payload, 1);
+        assert!(c.pop_until(2.0).is_none());
+        assert_eq!(c.live_len(), 1);
+        assert_eq!(c.pop_until(9.0).unwrap().payload, 5);
+    }
 
     #[test]
     fn pops_in_time_order() {

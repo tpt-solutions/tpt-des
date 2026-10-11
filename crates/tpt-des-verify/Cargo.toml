@@ -15,6 +15,9 @@ homepage.workspace = true
 
 [dependencies]
 tpt-des-core = { workspace = true }
+tpt-des-markov = { workspace = true, features = ["std"] }
+tpt-des-petri = { workspace = true, features = ["std"] }
+tpt-des-resource = { workspace = true, features = ["std"] }
 proptest = { workspace = true }
 
 [lints]

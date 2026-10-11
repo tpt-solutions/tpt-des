@@ -6,8 +6,22 @@
 //! never fire, and the live-count bookkeeping is exact.
 
 use proptest::prelude::*;
-use tpt_des_core::{EntityId, EventCalendar, Ticks, Time};
+use tpt_des_core::{EntityId, EventCalendar, EventId, Ticks, Time};
 use tpt_des_verify::strategies::{cancellation_mask, schedule_plan};
+
+/// Schedule at `t` with the priority `priority % 4`. The priority is a const
+/// generic, so each class needs its own call site; the payload records the
+/// class so pops can be checked against it.
+fn schedule_with(cal: &mut EventCalendar<Ticks, usize>, t: u32, priority: u8) -> EventId {
+    let at = Time::from_raw(f64::from(t));
+    let class = usize::from(priority % 4);
+    match priority % 4 {
+        0 => cal.schedule_at::<0>(at, EntityId(0), class),
+        1 => cal.schedule_at::<1>(at, EntityId(0), class),
+        2 => cal.schedule_at::<2>(at, EntityId(0), class),
+        _ => cal.schedule_at::<3>(at, EntityId(0), class),
+    }
+}
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
@@ -18,10 +32,10 @@ proptest! {
         mask in cancellation_mask(48),
     ) {
         let mut cal: EventCalendar<Ticks, usize> = EventCalendar::new();
-        let ids: Vec<_> = plan
-            .iter()
-            .map(|&(t, _)| cal.schedule_at::<0>(Time::from_raw(t as f64), EntityId(0), t as usize))
-            .collect();
+        let mut ids = Vec::with_capacity(plan.len());
+        for &(t, p) in &plan {
+            ids.push(schedule_with(&mut cal, t, p));
+        }
         let mut cancelled = 0usize;
         for (i, &cancel) in mask.iter().enumerate() {
             if cancel && i < ids.len() && cal.cancel(ids[i]) {
@@ -34,6 +48,8 @@ proptest! {
         while let Some(ev) = cal.pop() {
             let key = (ev.time, ev.priority, ev.id.raw());
             prop_assert!(key >= last, "pop order violated: {:?} after {:?}", key, last);
+            // The stored priority is the one the event was scheduled with.
+            prop_assert_eq!(usize::from(ev.priority), ev.payload);
             last = key;
             fired += 1;
         }
@@ -48,10 +64,10 @@ proptest! {
     ) {
         let mut cal: EventCalendar<Ticks, usize> = EventCalendar::new();
         let n = plan.len();
-        let ids: Vec<_> = plan
-            .iter()
-            .map(|&(t, _)| cal.schedule_at::<0>(Time::from_raw(t as f64), EntityId(0), t as usize))
-            .collect();
+        let mut ids = Vec::with_capacity(n);
+        for &(t, p) in &plan {
+            ids.push(schedule_with(&mut cal, t, p));
+        }
         prop_assert_eq!(cal.live_len(), n);
         let mut cancelled = 0usize;
         for (i, &cancel) in mask.iter().enumerate() {

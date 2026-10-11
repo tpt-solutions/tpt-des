@@ -21,6 +21,22 @@ pub enum ReachabilityError {
     InvalidInitialMarking,
 }
 
+impl core::fmt::Display for ReachabilityError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ReachabilityError::TooManyStates => {
+                write!(f, "reachability exceeded the state bound")
+            }
+            ReachabilityError::InvalidInitialMarking => {
+                write!(f, "initial marking does not match the net's place count")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ReachabilityError {}
+
 /// The reachability graph: states, labeled edges, and the initial index.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReachabilityGraph {

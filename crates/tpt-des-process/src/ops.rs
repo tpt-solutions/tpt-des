@@ -5,7 +5,7 @@
 //! cancelled, and the flag is consumed — the coroutine continues from the
 //! await point and decides whether to recover or abort.
 
-use crate::system::{ProcessId, ProcessOutput, Sim};
+use crate::system::{wake_front, ProcessId, ProcessOutput, Sim};
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -49,7 +49,15 @@ impl core::fmt::Debug for Delay {
 }
 
 impl Delay {
+    /// # Panics
+    ///
+    /// If `duration` is NaN or negative: such a delay has no meaningful
+    /// deadline, and silently scheduling it would corrupt the clock order.
     pub(crate) fn new(sim: Sim, pid: ProcessId, duration: f64) -> Self {
+        assert!(
+            duration >= 0.0,
+            "delay duration must be a non-negative number, got {duration}"
+        );
         let deadline = sim.now() + duration;
         Self {
             sim,
@@ -159,6 +167,8 @@ impl Future for Acquire {
                 this.queued = false;
             }
             *shared.resources.get_mut(&this.resource).expect("known") -= this.amount;
+            // The next waiter may also fit in what is left.
+            wake_front(&mut shared, this.resource);
             return Poll::Ready(Ok(()));
         }
         if !this.queued {
@@ -199,6 +209,14 @@ impl WaitUntil {
     where
         F: Fn(&Sim) -> bool + 'static,
     {
+        // Already true: never register, so the first poll completes.
+        if predicate(&sim) {
+            return Self {
+                sim,
+                pid,
+                condition_id: None,
+            };
+        }
         let id = {
             let mut shared = sim.shared.borrow_mut();
             let id = shared.next_condition;
@@ -226,9 +244,10 @@ impl Future for WaitUntil {
         let mut shared = this.sim.shared.borrow_mut();
         if shared.interrupted.remove(&this.pid) {
             let pid = this.pid;
-            shared
-                .conditions
-                .retain(|condition| !condition.procs.contains(&pid));
+            for condition in &mut shared.conditions {
+                condition.procs.retain(|&p| p != pid);
+            }
+            shared.conditions.retain(|c| !c.procs.is_empty());
             return Poll::Ready(Err(Interrupt));
         }
         match this.condition_id.take() {

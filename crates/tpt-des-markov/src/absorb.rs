@@ -27,8 +27,12 @@ pub struct AbsorbingAnalysis {
 }
 
 /// True if state `i` is absorbing (its row is the unit vector on `i`).
+///
+/// Compared within [`ROW_TOLERANCE`](crate::dtmc::ROW_TOLERANCE): rows are
+/// validated to sum to 1 only up to that tolerance, so an exact comparison
+/// could miss an absorbing state whose self-loop carries rounding residue.
 pub fn is_absorbing(dtmc: &Dtmc, i: usize) -> bool {
-    dtmc.p(i, i) == 1.0
+    (dtmc.p(i, i) - 1.0).abs() <= crate::dtmc::ROW_TOLERANCE
 }
 
 /// Analyze an absorbing chain.
@@ -64,9 +68,10 @@ pub fn analyze(dtmc: &Dtmc) -> Result<AbsorbingAnalysis, MarkovError> {
     }
     let q = DMatrix::from_row_slice(t_count, t_count, &q_data);
     let identity = DMatrix::from_diagonal(&DVector::from_fn(t_count, |_| 1.0));
+    // Singular (I − Q) means some transient state never reaches absorption.
     let fundamental = (identity - q)
         .inverse()
-        .map_err(|_| MarkovError::NotConvergent)?;
+        .map_err(|_| MarkovError::Singular)?;
 
     // t = N·1
     let ones = DVector::from_fn(t_count, |_| 1.0);

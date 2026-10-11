@@ -77,12 +77,13 @@ impl<Unit> Time<Unit> {
 
     /// Wrap a raw `f64` value in this time unit.
     ///
-    /// Panics in debug builds if `raw` is not finite; in release builds a
-    /// non-finite time is carried through but will sort last (see [`Ord`]).
-    /// Negative zero is normalized to `+0.0` so `total_cmp` ordering sees a
-    /// single zero.
+    /// # Panics
+    ///
+    /// If `raw` is NaN or infinite, in all build profiles: a non-finite time
+    /// would corrupt event ordering silently in release builds. Negative zero
+    /// is normalized to `+0.0` so `total_cmp` ordering sees a single zero.
     pub fn from_raw(raw: f64) -> Self {
-        debug_assert!(raw.is_finite(), "simulation time must be finite");
+        assert!(raw.is_finite(), "simulation time must be finite, got {raw}");
         Self {
             raw: if raw == 0.0 { 0.0 } else { raw },
             _unit: PhantomData,
