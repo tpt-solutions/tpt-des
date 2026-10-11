@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-description = "tpt-des — a pure-Rust, AI-native discrete event simulation and stochastic systems library"
+description = "tpt-des — a pure-Rust discrete event simulation and stochastic systems library"
 version = "0.1.0"
 authors = ["TPT Solutions"]
 edition = "2021"
@@ -45,6 +45,8 @@ tpt-math-linalg-dense = { version = "0.1.0", default-features = false }
 
 # Dev / verification tooling.
 proptest = "1.5"
+# Optional result serialization for tpt-des-queue (see its `serde` feature).
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 criterion = "0.5"
 
 [workspace.lints.rust]

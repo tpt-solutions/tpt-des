@@ -15,7 +15,8 @@
 
 use crate::error::QueueError;
 use core::fmt;
-use std::collections::{BTreeMap, VecDeque};
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 use tpt_des_core::{Ctx, Entity, EntityId, Seconds, SimRng, Simulation, Time};
 use tpt_math_prob_core::Distribution as _;
 use tpt_math_prob_dist::{exp, Dist};
@@ -113,6 +114,7 @@ pub enum QueueEvent {
 /// Integrals (`area_*`) are time-weighted, so `time_avg_number` and
 /// `utilization` are exact for the simulated window.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct QueueMetrics {
     /// Total arrivals accepted (blocked arrivals excluded).
     pub arrived: u64,
@@ -136,10 +138,14 @@ pub struct QueueMetrics {
     /// more urgent). Every job lands in class `0` unless
     /// [`QueueConfig::priority`] is set.
     pub waits_by_priority: BTreeMap<i64, ClassWait>,
+    /// Number of parallel servers the metrics were gathered with. Used to turn
+    /// busy-server time into a per-server [`utilization`](Self::utilization).
+    pub servers: usize,
 }
 
 /// Wait-time totals for one priority class.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ClassWait {
     /// Jobs of this class that started service (post warm-up).
     pub started: u64,
@@ -192,7 +198,7 @@ impl QueueMetrics {
         if span <= 0.0 {
             0.0
         } else {
-            self.area_busy / span
+            self.area_busy / (span * self.servers.max(1) as f64)
         }
     }
 }
@@ -203,8 +209,68 @@ struct Job {
     id: u64,
     arrived_at: f64,
     priority: i64,
-    /// Remaining work (processor sharing only).
-    work: f64,
+    /// Time service began: NaN while waiting, equal to `arrived_at` under
+    /// processor sharing (service starts on arrival).
+    started_at: f64,
+}
+
+/// The life of one completed job, for trace export.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct JobRecord {
+    /// Job number, in arrival order from 0.
+    pub job: u64,
+    /// Priority class (see [`QueueConfig::priority`]).
+    pub priority: i64,
+    /// Arrival time.
+    pub arrived_at: f64,
+    /// Time service began.
+    pub started_at: f64,
+    /// Departure time.
+    pub departed_at: f64,
+}
+
+impl JobRecord {
+    /// Time spent waiting before service.
+    pub fn wait(&self) -> f64 {
+        self.started_at - self.arrived_at
+    }
+
+    /// Time from arrival to departure.
+    pub fn sojourn(&self) -> f64 {
+        self.departed_at - self.arrived_at
+    }
+}
+
+/// A job in processor sharing. `finish` is the value of the virtual-time
+/// clock at which the job completes: each job in service accrues `1/n` of
+/// virtual time per unit of real time, so `finish − virtual_time` is its
+/// remaining work and the job with the smallest `finish` completes first.
+struct PsEntry {
+    finish: f64,
+    job: Job,
+}
+
+impl PartialEq for PsEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for PsEntry {}
+
+impl PartialOrd for PsEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PsEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.finish
+            .total_cmp(&other.finish)
+            .then(self.job.id.cmp(&other.job.id))
+    }
 }
 
 /// Configuration for a simulated queue.
@@ -240,6 +306,68 @@ impl fmt::Debug for QueueConfig {
     }
 }
 
+/// Jobs waiting for the server. FIFO and LIFO use a deque; priority uses a
+/// binary heap, so each dispatch is O(log n) rather than a scan of the line.
+#[derive(Default)]
+struct WaitingLine {
+    deque: VecDeque<Job>,
+    by_priority: BinaryHeap<Urgent>,
+}
+
+impl WaitingLine {
+    fn len(&self) -> usize {
+        self.deque.len() + self.by_priority.len()
+    }
+
+    fn push(&mut self, job: Job, discipline: Discipline) {
+        match discipline {
+            Discipline::Priority => self.by_priority.push(Urgent(job)),
+            _ => self.deque.push_back(job),
+        }
+    }
+
+    fn take(&mut self, discipline: Discipline) -> Option<Job> {
+        match discipline {
+            Discipline::Fifo => self.deque.pop_front(),
+            Discipline::Lifo => self.deque.pop_back(),
+            Discipline::Priority => self.by_priority.pop().map(|u| u.0),
+            Discipline::ProcessorSharing => None, // handled separately
+        }
+    }
+}
+
+/// Heap entry ordered so the most urgent job is the greatest: lowest priority
+/// number first, then lowest job id, which is arrival order.
+struct Urgent(Job);
+
+impl Urgent {
+    fn key(&self) -> (i64, u64) {
+        (self.0.priority, self.0.id)
+    }
+}
+
+impl PartialEq for Urgent {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for Urgent {}
+
+impl PartialOrd for Urgent {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Urgent {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let (p, id) = self.key();
+        let (op, oid) = other.key();
+        op.cmp(&p).then(oid.cmp(&id))
+    }
+}
+
 /// A simulated single-station queue, usable as a `tpt-des-core` entity.
 pub struct SimQueue {
     id: EntityId,
@@ -247,8 +375,16 @@ pub struct SimQueue {
     /// Warm-up cutoff: jobs arriving before this time are excluded from the
     /// wait/sojourn accumulators, and the time integrals restart here.
     warmup: f64,
-    waiting: VecDeque<Job>,
-    in_service: Vec<Job>, // 0..1 jobs, or 0..n under processor sharing
+    servers: usize,
+    /// Completed-job records, when tracing is enabled.
+    trace: Option<Vec<JobRecord>>,
+    waiting: WaitingLine,
+    /// Jobs in service under FIFO, LIFO, or priority (at most `servers`).
+    in_service: Vec<Job>,
+    /// Jobs in service under processor sharing, earliest finish first.
+    ps_jobs: BinaryHeap<Reverse<PsEntry>>,
+    /// Attained service per job in service, as processor sharing advances.
+    virtual_time: f64,
     next_job: u64,
     /// Departure event currently scheduled (processor sharing reschedules it
     /// whenever the population changes).
@@ -283,21 +419,45 @@ impl SimQueue {
     ///
     /// If `warmup` is NaN or negative.
     pub fn with_warmup(id: EntityId, config: QueueConfig, warmup: f64) -> Self {
+        Self::with_servers(id, config, warmup, 1)
+    }
+
+    /// Create a queue entity with `servers` identical parallel servers and a
+    /// warm-up cutoff, as in [`with_warmup`](Self::with_warmup).
+    ///
+    /// # Panics
+    ///
+    /// If `warmup` is NaN or negative, if `servers` is zero, or if `servers`
+    /// exceeds one under [`Discipline::ProcessorSharing`] (the simulator's
+    /// processor sharing is a single speed-1 processor).
+    pub fn with_servers(id: EntityId, config: QueueConfig, warmup: f64, servers: usize) -> Self {
         assert!(
             warmup.is_finite() && warmup >= 0.0,
             "warm-up must be a finite, non-negative time, got {warmup}"
+        );
+        assert!(servers >= 1, "a queue needs at least one server");
+        assert!(
+            servers == 1 || config.discipline != Discipline::ProcessorSharing,
+            "processor sharing is single-server only"
         );
         Self {
             id,
             config,
             warmup,
-            waiting: VecDeque::new(),
+            servers,
+            trace: None,
+            waiting: WaitingLine::default(),
             in_service: Vec::new(),
+            ps_jobs: BinaryHeap::new(),
+            virtual_time: 0.0,
             next_job: 0,
             pending_departure: None,
             last_population: 0,
             last_update: 0.0,
-            metrics: QueueMetrics::default(),
+            metrics: QueueMetrics {
+                servers,
+                ..QueueMetrics::default()
+            },
         }
     }
 
@@ -312,6 +472,7 @@ impl SimQueue {
         self.metrics = QueueMetrics {
             last_t,
             reset_at: last_t,
+            servers: self.servers,
             ..QueueMetrics::default()
         };
     }
@@ -349,35 +510,31 @@ impl SimQueue {
         self.warmup <= 0.0 || arrived_at >= self.warmup
     }
 
+    /// Jobs in service, under any discipline.
+    fn population(&self) -> usize {
+        self.in_service.len() + self.ps_jobs.len()
+    }
+
     fn update_integrals(&mut self, now: f64) {
         let dt = now - self.metrics.last_t;
         if dt > 0.0 {
-            let number = self.waiting.len() + self.in_service.len();
-            self.metrics.area_number += number as f64 * dt;
-            self.metrics.area_busy += self.in_service.len() as f64 * dt;
+            let in_service = self.population();
+            self.metrics.area_number += (self.waiting.len() + in_service) as f64 * dt;
+            // Busy time counts busy servers. Under processor sharing the one
+            // server is busy whenever anything is in service, so the count is
+            // a 0/1 indicator rather than the job count.
+            let busy_servers = match self.config.discipline {
+                Discipline::ProcessorSharing => usize::from(in_service > 0),
+                _ => self.in_service.len(),
+            };
+            self.metrics.area_busy += busy_servers as f64 * dt;
         }
         self.metrics.last_t = now;
     }
 
     /// Pick the next job from the waiting line per the discipline.
     fn take_next(&mut self) -> Option<Job> {
-        match self.config.discipline {
-            Discipline::Fifo => self.waiting.pop_front(),
-            Discipline::Lifo => self.waiting.pop_back(),
-            Discipline::Priority => {
-                let mut best = 0usize;
-                for (i, job) in self.waiting.iter().enumerate() {
-                    if job.priority < self.waiting[best].priority
-                        || (job.priority == self.waiting[best].priority
-                            && job.arrived_at < self.waiting[best].arrived_at)
-                    {
-                        best = i;
-                    }
-                }
-                self.waiting.remove(best)
-            }
-            Discipline::ProcessorSharing => None, // handled separately
-        }
+        self.waiting.take(self.config.discipline)
     }
 
     fn schedule_next_arrival(&mut self, ctx: &mut Ctx<'_, Seconds, QueueEvent>) {
@@ -387,46 +544,37 @@ impl SimQueue {
         self.next_job += 1;
     }
 
-    /// Processor sharing, phase 1: advance remaining work of all jobs
-    /// currently in service to `now` (each of the `last_population` jobs in
-    /// service consumed `elapsed` / n seconds of work). Must be called
-    /// *before* any membership change.
+    /// Processor sharing, phase 1: advance the virtual-time clock to `now`.
+    /// Each of the `last_population` jobs in service gains `elapsed / n` of
+    /// service, so every job's remaining work shrinks by the same amount.
+    /// Must be called *before* any membership change.
     fn ps_advance(&mut self, now: f64) {
         let elapsed = now - self.last_update;
         let n = self.last_population;
         if n > 0 && elapsed > 0.0 {
-            for job in self.in_service.iter_mut() {
-                job.work -= elapsed / n as f64;
-            }
+            self.virtual_time += elapsed / n as f64;
         }
         self.last_update = now;
     }
 
     /// Processor sharing, phase 2: after a membership change, schedule the
-    /// next completion (minimum remaining work · population).
+    /// next completion. The earliest finisher has the least remaining work
+    /// `finish − virtual_time`, and it completes after that work times the
+    /// population.
     fn ps_reschedule(&mut self, ctx: &mut Ctx<'_, Seconds, QueueEvent>) {
-        self.last_population = self.in_service.len();
+        self.last_population = self.ps_jobs.len();
         if let Some(id) = self.pending_departure.take() {
             ctx.cancel(id);
         }
-        if let Some(next) = self
-            .in_service
-            .iter()
-            .enumerate()
-            .min_by(|a, b| {
-                a.1.work
-                    .total_cmp(&b.1.work)
-                    .then_with(|| a.1.id.cmp(&b.1.id))
-            })
-            .map(|(i, j)| (i, j.id, j.work))
-        {
+        if let Some(Reverse(next)) = self.ps_jobs.peek() {
             // Clamp at zero: the minimum-work job may sit a rounding hair
             // below zero at its own completion time.
-            let delay = next.2.max(0.0) * self.in_service.len() as f64;
+            let remaining = (next.finish - self.virtual_time).max(0.0);
+            let delay = remaining * self.last_population as f64;
             let event = ctx.schedule::<0>(
                 Time::from_raw(delay),
                 self.id,
-                QueueEvent::Departure(next.1),
+                QueueEvent::Departure(next.job.id),
             );
             self.pending_departure = Some(event);
         }
@@ -448,7 +596,7 @@ impl Entity<Seconds, QueueEvent> for SimQueue {
             QueueEvent::Arrival(_) => {
                 self.schedule_next_arrival(ctx);
 
-                let in_system = self.waiting.len() + self.in_service.len();
+                let in_system = self.waiting.len() + self.population();
                 if let Some(cap) = self.config.capacity {
                     if in_system >= cap {
                         self.metrics.blocked += 1;
@@ -467,12 +615,16 @@ impl Entity<Seconds, QueueEvent> for SimQueue {
                         // starts fresh from this instant.
                         self.ps_advance(now);
                         let work = checked_sample(self.config.service.draw(ctx.rng), "service");
-                        self.in_service.push(Job {
+                        let job = Job {
                             id: event_id_of(&event),
                             arrived_at: now,
                             priority,
-                            work,
-                        });
+                            started_at: now,
+                        };
+                        self.ps_jobs.push(Reverse(PsEntry {
+                            finish: self.virtual_time + work,
+                            job,
+                        }));
                         self.ps_reschedule(ctx);
                     }
                     _ => {
@@ -480,26 +632,30 @@ impl Entity<Seconds, QueueEvent> for SimQueue {
                             id: event_id_of(&event),
                             arrived_at: now,
                             priority,
-                            work: 0.0,
+                            started_at: f64::NAN,
                         };
-                        if self.in_service.is_empty() {
+                        if self.in_service.len() < self.servers {
                             self.start_service(job, ctx);
                         } else {
-                            self.waiting.push_back(job);
+                            self.waiting.push(job, self.config.discipline);
                         }
                     }
                 }
             }
             QueueEvent::Departure(job_id) => match self.config.discipline {
                 Discipline::ProcessorSharing => {
-                    if let Some(pos) = self.in_service.iter().position(|j| j.id == job_id) {
-                        let job = self.in_service.remove(pos);
+                    self.ps_advance(now);
+                    // The scheduled departure is always for the earliest finisher
+                    // (earlier schedules were cancelled), so pop that job.
+                    if let Some(Reverse(entry)) = self.ps_jobs.pop() {
+                        debug_assert_eq!(entry.job.id, job_id, "departure for a non-minimal job");
+                        let job = entry.job;
                         if self.counts(job.arrived_at) {
                             self.metrics.completed += 1;
                             self.metrics.total_sojourn += now - job.arrived_at;
                         }
+                        self.record_departure(job, now);
                     }
-                    self.ps_advance(now);
                     self.ps_reschedule(ctx);
                 }
                 _ => {
@@ -509,6 +665,7 @@ impl Entity<Seconds, QueueEvent> for SimQueue {
                             self.metrics.completed += 1;
                             self.metrics.total_sojourn += now - job.arrived_at;
                         }
+                        self.record_departure(job, now);
                     }
                     if let Some(next) = self.take_next() {
                         self.start_service(next, ctx);
@@ -533,14 +690,25 @@ impl SimQueue {
             class.total_wait += wait;
         }
         let service = checked_sample(self.config.service.draw(ctx.rng), "service");
-        let mut started = job;
-        started.work = service;
-        self.in_service.push(started);
-        ctx.schedule::<0>(
-            Time::from_raw(service),
-            self.id,
-            QueueEvent::Departure(job.id),
-        );
+        let id = job.id;
+        self.in_service.push(Job {
+            started_at: ctx.now.raw(),
+            ..job
+        });
+        ctx.schedule::<0>(Time::from_raw(service), self.id, QueueEvent::Departure(id));
+    }
+
+    /// Append a completed job to the trace, if tracing is on.
+    fn record_departure(&mut self, job: Job, departed_at: f64) {
+        if let Some(trace) = self.trace.as_mut() {
+            trace.push(JobRecord {
+                job: job.id,
+                priority: job.priority,
+                arrived_at: job.arrived_at,
+                started_at: job.started_at,
+                departed_at,
+            });
+        }
     }
 }
 
@@ -593,6 +761,51 @@ fn event_id_of(event: &QueueEvent) -> u64 {
 /// assert!((metrics.mean_sojourn() - 2.0).abs() < 0.4);
 /// ```
 pub fn run_queue(config: QueueConfig, horizon: f64, warmup: f64, seed: u64) -> QueueMetrics {
+    run_queue_multi(config, 1, horizon, warmup, seed)
+}
+
+/// Like [`run_queue`], with `servers` identical parallel servers sharing one
+/// waiting line (an M/M/c-style station when the config is exponential).
+///
+/// # Panics
+///
+/// As [`run_queue`], and if `servers` is zero or exceeds one under processor
+/// sharing.
+pub fn run_queue_multi(
+    config: QueueConfig,
+    servers: usize,
+    horizon: f64,
+    warmup: f64,
+    seed: u64,
+) -> QueueMetrics {
+    run_inner(config, servers, horizon, warmup, seed, false).0
+}
+
+/// Like [`run_queue_multi`], and also returns one [`JobRecord`] per job that
+/// completed, in departure order. Records include jobs that arrived during
+/// warm-up, so filter on `arrived_at` to match the metrics.
+///
+/// # Panics
+///
+/// As [`run_queue_multi`].
+pub fn run_queue_traced(
+    config: QueueConfig,
+    servers: usize,
+    horizon: f64,
+    warmup: f64,
+    seed: u64,
+) -> (QueueMetrics, Vec<JobRecord>) {
+    run_inner(config, servers, horizon, warmup, seed, true)
+}
+
+fn run_inner(
+    config: QueueConfig,
+    servers: usize,
+    horizon: f64,
+    warmup: f64,
+    seed: u64,
+    traced: bool,
+) -> (QueueMetrics, Vec<JobRecord>) {
     assert!(
         horizon.is_finite() && horizon > 0.0,
         "horizon must be finite and positive, got {horizon}"
@@ -601,7 +814,10 @@ pub fn run_queue(config: QueueConfig, horizon: f64, warmup: f64, seed: u64) -> Q
         warmup.is_finite() && (0.0..horizon).contains(&warmup),
         "warm-up must lie in [0, horizon), got {warmup} with horizon {horizon}"
     );
-    let mut queue = SimQueue::with_warmup(EntityId(0), config, warmup);
+    let mut queue = SimQueue::with_servers(EntityId(0), config, warmup, servers);
+    if traced {
+        queue.trace = Some(Vec::new());
+    }
     {
         let mut sim = Simulation::new(seed);
         let _id = sim.add_entity(&mut queue);
@@ -609,5 +825,25 @@ pub fn run_queue(config: QueueConfig, horizon: f64, warmup: f64, seed: u64) -> Q
         sim.finalize();
     }
     queue.finalize(horizon);
-    queue.metrics().clone()
+    let records = queue.trace.take().unwrap_or_default();
+    (queue.metrics().clone(), records)
+}
+
+/// Render job records as CSV, one row per job, with `wait` and `sojourn`
+/// columns computed from the times. Floats use Rust's shortest round-trip form.
+pub fn trace_to_csv(records: &[JobRecord]) -> String {
+    let mut out = String::from("job,priority,arrived_at,started_at,departed_at,wait,sojourn\n");
+    for r in records {
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{}\n",
+            r.job,
+            r.priority,
+            r.arrived_at,
+            r.started_at,
+            r.departed_at,
+            r.wait(),
+            r.sojourn()
+        ));
+    }
+    out
 }

@@ -145,6 +145,12 @@ impl PetriNet {
         if !self.is_enabled(t, marking) {
             return None;
         }
+        self.fire_enabled(t, marking)
+    }
+
+    /// [`fire`](Self::fire) without the enabling check, for callers that have
+    /// just checked it. Still returns `None` on a `u32` overflow.
+    pub(crate) fn fire_enabled(&self, t: usize, marking: &Marking) -> Option<Marking> {
         let transition = &self.transitions[t];
         let mut next = marking.0.clone();
         for &(p, w) in &transition.pre {

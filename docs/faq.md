@@ -64,12 +64,12 @@ equations directly, with the normalization constraint in place of one
 equation. `tol` bounds the residual of that solution. See the
 [status](status.md) page.
 
-## Why does the umbrella crate have `core` as a re-export name?
+## Why is the core crate re-exported as `kernel`, not `core`?
 
-`tpt_des::core` re-exports `tpt-des-core`. If you glob-import the umbrella
-(`use tpt_des::*`), the name `core` can shadow Rust's built-in `core` crate.
-Import the module you need by name instead. The maintainers have not decided
-whether to rename it, because that would be a breaking change.
+`tpt_des::kernel` re-exports `tpt-des-core`. It was called `core` until the
+0.1.x review follow-ups; the name was changed because a glob import of the
+umbrella (`use tpt_des::*`) would shadow Rust's built-in `core` crate. The
+Cargo feature is still named `core`, so `features = ["core"]` is unchanged.
 
 ## Is it on crates.io?
 

@@ -119,8 +119,8 @@ impl Dtmc {
     pub fn as_dmatrix(&self) -> DMatrix {
         let n = self.len();
         let mut data = Vec::with_capacity(n * n);
-        for row in self.rows() {
-            data.extend_from_slice(&row);
+        for i in 0..n {
+            data.extend_from_slice(self.chain.row(i));
         }
         DMatrix::from_row_slice(n, n, &data)
     }

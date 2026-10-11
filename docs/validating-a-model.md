@@ -93,3 +93,25 @@ this for the queue and the calendar.
 When you publish a result, give the parameters, the seed or seeds, the warm-up
 and horizon, the number of replications, the interval, and the analytic check
 you ran. Someone else can then repeat the run.
+
+## Shortcut: validate an M/M/c station in one call
+
+`tpt_des_queue::validate_mmc` runs the checks in sections 1 to 3 for a
+multi-server station and returns a table of simulated and analytic values for
+`Wq`, `W`, `L`, and per-server utilization:
+
+```rust
+use tpt_des_queue::validate_mmc;
+
+// λ = 2.4, μ = 1, three servers, 6 independent replications.
+let report = validate_mmc(2.4, 1.0, 3, 20_000.0, 2_000.0, 6, 3).unwrap();
+report.assert_passes(); // panics with the full table if a metric disagrees
+```
+
+A metric passes when it lies within four standard errors, plus 2% of the
+analytic value, of the analytic value. The 2% covers the bias left by a finite
+warm-up.
+
+To size a station before you simulate it, `size_for_mean_wait` returns the
+fewest servers whose analytic mean wait meets a target. Then `validate_mmc`
+confirms the chosen count by simulation.

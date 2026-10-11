@@ -19,6 +19,8 @@ pub enum ReachabilityError {
     TooManyStates,
     /// The initial marking does not match the net's place count.
     InvalidInitialMarking,
+    /// Firing a transition would push a place past `u32::MAX` tokens.
+    TokenOverflow,
 }
 
 impl core::fmt::Display for ReachabilityError {
@@ -29,6 +31,9 @@ impl core::fmt::Display for ReachabilityError {
             }
             ReachabilityError::InvalidInitialMarking => {
                 write!(f, "initial marking does not match the net's place count")
+            }
+            ReachabilityError::TokenOverflow => {
+                write!(f, "firing a transition overflows a place's token count")
             }
         }
     }
@@ -94,8 +99,14 @@ pub fn reachability(
 
     while let Some(current) = queue.pop_front() {
         let mut out = Vec::new();
-        for t in net.enabled(&states[current]) {
-            let successor = net.fire(t, &states[current]).expect("enabled transition");
+        for t in 0..net.transitions() {
+            if !net.is_enabled(t, &states[current]) {
+                continue;
+            }
+            // Enabling was just checked, so skip `fire`'s second check.
+            let successor = net
+                .fire_enabled(t, &states[current])
+                .ok_or(ReachabilityError::TokenOverflow)?;
             let next_idx = match index.get(&successor) {
                 Some(&i) => i,
                 None => {
@@ -177,6 +188,22 @@ mod tests {
         assert_eq!(
             reachability(&net, &Marking(vec![0]), 10),
             Err(ReachabilityError::TooManyStates)
+        );
+    }
+
+    /// Firing `t` would push `q` past `u32::MAX`. That used to panic inside
+    /// the search; it is now a reported error.
+    #[test]
+    fn token_overflow_is_an_error_not_a_panic() {
+        let mut net = PetriNet::new();
+        let p = net.add_place("p");
+        let q = net.add_place("q");
+        let t = net.add_transition("t");
+        net.add_arc_pt(p, t, 1);
+        net.add_arc_tp(t, q, 1);
+        assert_eq!(
+            reachability(&net, &Marking(vec![1, u32::MAX]), 10),
+            Err(ReachabilityError::TokenOverflow)
         );
     }
 }

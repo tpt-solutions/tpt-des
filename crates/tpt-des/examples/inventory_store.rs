@@ -7,7 +7,7 @@
 //!
 //! Run with `cargo run -p tpt-des --example inventory_store --features "std resource"`.
 
-use tpt_des::core::{Ctx, Entity, EntityId, Simulation, Ticks, Time};
+use tpt_des::kernel::{Ctx, Entity, EntityId, Simulation, Ticks, Time};
 use tpt_des::resource::store::Store;
 
 const CAPACITY: i64 = 60;

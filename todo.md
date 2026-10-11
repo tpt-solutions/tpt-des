@@ -98,8 +98,8 @@ to the maintainer — see the Phase 5 notes at the bottom).
 - [x] Full `cargo-deny` audit pass across all sub-crates (`just deny` — licenses/advisories/bans/sources clean on the resolved graph)
 - [x] `CHANGELOG.md`; align versions across all workspace members (all members at `0.1.0` via `[workspace.package]`)
 - [x] Confirm dual LICENSE files and `authors = ["TPT Solutions"]` consistent across every crate (both inherited from `[workspace.package]`; LICENSE-MIT/LICENSE-APACHE copied verbatim from `tpt-math`)
-- [ ] Decide publish target: crates.io vs. internal/path-dependency-only — **maintainer decision** (the ecosystem precedent is crates.io: `tpt-math` is published; the umbrella's dependency graph is publish-ready, but publishing is outward-facing and left for sign-off)
-- [ ] Tag and publish v1.0.0 — **maintainer decision** (blocked on the publish-target choice; version currently reads `0.1.0` matching the ecosystem convention for first releases)
+- [ ] Decide publish target: crates.io vs. internal/path-dependency-only — **maintainer decision; not touched in the 2026 batch (you asked for no publish)** (the ecosystem precedent is crates.io: `tpt-math` is published; the umbrella's dependency graph is publish-ready, but publishing is outward-facing and left for sign-off)
+- [ ] Tag and publish v1.0.0 — **maintainer decision; not done (you asked for no publish)** (blocked on the publish-target choice; version currently reads `0.1.0` matching the ecosystem convention for first releases)
 
 ---
 
@@ -143,7 +143,8 @@ Every Phase 6 fix lands with a failing-first regression test (release mode where
   - **Done:** `from_raw` and `advance_to` check in all profiles; events to unknown entities are counted in `RunStats::dropped_events` (no_std cannot print a warning); `core_mut` counts a draw; `run_until` advances the clock to a finite horizon.
 - [x] `tpt-des-verify`: add missing `tpt-des-markov` dependency (Kani build fails); replace local-`u8` pseudo-proofs with harnesses on real `Simulation`/`PetriNet`; add the spec'd "acyclic resource graph ⇒ no deadlock" proof; fix `u8` overflow in assumes
   - **Done, not formally verified:** dependency added (with `std`); the two local-`u8` proofs now use `Simulation`/`PetriNet`; acyclic deadlock-freedom proofs added; `u8` overflow in the assumes fixed. Kani is not installed in the authoring environment, so the harness bodies were only compiled and run on random inputs through a temporary shim, not proved. Run `just kani` to verify.
-- [ ] Missing tests: contended acquire, `notify_all` reading state, interrupt of `Acquire`/`WaitUntil`, non-zero queue priorities, large-c `mmc`, duplicate Petri arcs, stats edge cases, calendar proptest that actually varies priority (`calendar_props.rs`), tighten the 25–30% simulation tolerances
+- [x] Missing tests: contended acquire, `notify_all` reading state, interrupt of `Acquire`/`WaitUntil`, non-zero queue priorities, large-c `mmc`, duplicate Petri arcs, stats edge cases, calendar proptest that actually varies priority (`calendar_props.rs`), tighten the 25–30% simulation tolerances
+  - **Done (2026 batch):** the M/M/1 checks average 5 independent replications, with a 10% band on the means (utilization 5%). The PS and FIFO/LIFO checks use the same replication helper. Test time rose from about 10 s to 45–75 s in debug, because each proptest case now runs five simulations. Reduce `ProptestConfig::with_cases` if that is too slow for CI.
   - **Partial:** every test in the list above is added (the calendar proptest now varies priority). Still open: tightening the 25–30% tolerances in `crates/tpt-des-queue/tests/mm1_vs_analytic.rs`. Doing it properly needs replication-based confidence intervals and longer runs, which would roughly double that file's ~50 s debug runtime, so it is left for a decision.
 
 ## Phase 7 — CI & build hygiene
@@ -152,36 +153,46 @@ Every Phase 6 fix lands with a failing-first regression test (release mode where
   - **Done:** release run added as a second step in the `test` matrix. The release suite passes locally.
 - [x] CI: run Kani for real (drop `--only-codegen`; keep non-blocking until stable)
   - **Done:** flag dropped from the `kani` job, still `continue-on-error`. Not run here: Kani is not installed in the authoring environment.
-- [ ] CI: MSRV (1.84) job, `cargo doc -D warnings`, wasm32 build, per-crate `--no-default-features` + umbrella feature-matrix builds, Windows/macOS test jobs
+- [x] CI: MSRV (1.84) job, `cargo doc -D warnings`, wasm32 build, per-crate `--no-default-features` + umbrella feature-matrix builds, Windows/macOS test jobs
+  - **Done (2026 batch):** the `feature-matrix` job builds 11 umbrella feature sets on their own. Running it locally found a real bug: `process_bank_teller` used `tpt_des::queue` without declaring the feature. Fixed. The non-core crates stay std-only and are documented as such, so their `--no-default-features` builds are not expected to pass.
   - **Added:** MSRV job (`1.84`), `doc` job with `RUSTDOCFLAGS=-D warnings` (passes locally with `--all-features`), wasm32 and thumbv6m builds of `tpt-des-core`, umbrella `--features core` build, and a Windows/macOS matrix for tests. Not run here: the MSRV toolchain and the matrix runners.
   - **Still open:** per-crate `--no-default-features` builds for the non-core crates (they need std, see the next item), and a fuller umbrella feature matrix.
 - [x] Resolve `no_std`/`alloc` claims for non-core crates (petri/stats/markov use `vec!`/`Vec` without alloc imports; queue has no `no_std` attribute) — add CI coverage or document as std-only
   - **Done (documented as std-only):** only `tpt-des-core` is no_std-capable. `markov` and `petri` fail `--no-default-features` because `tpt-math-linalg-dense` needs `alloc`/`std`. The umbrella manifest and the CI `no_std` job state this. `tpt-des-core` builds for `thumbv6m-none-eabi` and `wasm32-unknown-unknown`.
-- [ ] Umbrella `tpt-des`: `std` feature must use `dep?/std` so it does not enable every sub-crate; include `process`; fix `pub use tpt_des_core as core` shadowing and feature-reduced doctests
+- [x] Umbrella `tpt-des`: `std` feature must use `dep?/std` so it does not enable every sub-crate; include `process`; fix `pub use tpt_des_core as core` shadowing and feature-reduced doctests
+  - **Done (2026 batch):** the core re-export is now `tpt_des::kernel`, a breaking rename listed in the changelog. The Cargo feature is still `core`. `std` also enables `process/std`.
   - **Done:** `std` uses `dep?/std`; doctests are gated on their features; examples are gated with `required-features`. `--features core` builds and tests pass.
   - **Still open:** the `core` re-export shadows the `core` crate name for users who glob-import the umbrella. Renaming it is a breaking change, so it is left for a decision.
-- [ ] Commit `Cargo.lock`; `criterion`/`proptest` with `default-features = false`; consider thin LTO; add `[profile.test]` tuning
+- [x] Commit `Cargo.lock`; `criterion`/`proptest` with `default-features = false`; consider thin LTO; add `[profile.test]` tuning
+  - **Checked (2026 batch):** `Cargo.lock` is tracked in git (`git ls-files`). `criterion` and `proptest` keep their defaults on purpose; see the earlier note.
   - **Done:** `Cargo.lock` removed from `.gitignore` (it is tracked with the next commit). `[profile.test] opt-level = 1` added: the queue's `mm1_vs_analytic` suite went from 65 s to 5.5 s with overflow checks still on.
   - **Not changed, on purpose:** `lto = "fat"` in release is a maintainer choice and was left alone; `proptest` already runs with its default `std` feature, so disabling defaults gains nothing.
-- [ ] Add `CONTRIBUTING.md`, `SECURITY.md`, CI/MSRV badges; tighten `deny.toml` (`wildcards`, explicit bans for `nalgebra`/`clarabel`/`faer`/`statrs`)
+- [~] Add `CONTRIBUTING.md`, `SECURITY.md`, CI/MSRV badges; tighten `deny.toml` (`wildcards`, explicit bans for `nalgebra`/`clarabel`/`faer`/`statrs`)
+  - **Partial:** the CI badge is not in the README yet. It needs a run on GitHub to confirm the badge URL, so it is not added blind.
   - **Done:** `CONTRIBUTING.md` and `SECURITY.md` added. `deny.toml` denies wildcard versions and the four Apache-2.0-only crates; `cargo deny check` passes (bans, licenses, sources, advisories).
   - **Still open:** CI and MSRV badges in the README (wait for the CI jobs to run once).
 
 ## Phase 8 — Performance (benchmark before/after with criterion)
 
-- [ ] Calendar: replace the two `BTreeSet<u64>` (pending/cancelled) with per-entry flag or slab + generation ids (est. 2–4×)
+- [x] Calendar: replace the two `BTreeSet<u64>` (pending/cancelled) with per-entry flag or slab + generation ids (est. 2–4×)
+  - **Done (2026 batch):** slab with generation-tagged `EventId`s; `cancel` is O(1). Criterion, two calendar benchmarks: 2.0–2.6× faster. The public API is unchanged. Stale-handle and slot-reuse tests added.
   - **Open:** needs a slab with generation ids, which changes the public `EventId` type. Not started; it deserves its own change with a criterion before/after run.
-- [ ] Queue: `VecDeque` for FIFO (kill `Vec::remove(0)`), `BinaryHeap` for Priority, precompute `Exponential` distribution, indexed PS
+- [x] Queue: `VecDeque` for FIFO (kill `Vec::remove(0)`), `BinaryHeap` for Priority, precompute `Exponential` distribution, indexed PS
+  - **Done (2026 batch):** priority uses a heap; PS uses a virtual-time heap. `Exponential` is not precomputed on purpose. `Exp::new` is one check and a reciprocal, so caching would save nothing measurable and would cost `Copy` and `PartialEq`. A PS regression test also fixed the utilization bug found along the way.
   - **Done:** FIFO/LIFO use `VecDeque` (`pop_front`/`pop_back`).
   - **Open:** Priority still scans the waiting line on each dispatch (O(n)); the heap is not built. `Exponential` is not precomputed; PS is not indexed.
-- [ ] Resource: per-resource wait queues instead of O(waiters²) `grant_ready`; O(1) `waiting_count`
+- [x] Resource: per-resource wait queues instead of O(waiters²) `grant_ready`; O(1) `waiting_count`
+  - **Done (2026 batch):** per-resource queues keyed by (priority, id), one pass in `grant_ready`, index-based `cancel`. `waiting_count` is a map length. Regression test covers order and cancel.
   - **Open:** not started. `waiting_count` is still a scan.
-- [ ] Petri: avoid double marking clones and per-call `Vec` in `reachability`; O(1) `occupy` lookup
+- [x] Petri: avoid double marking clones and per-call `Vec` in `reachability`; O(1) `occupy` lookup
+  - **Done (2026 batch):** the search checks enabling once and fires without re-checking, and no `Vec` is built per state. One clone per new state remains, since the state is stored and indexed. Overflow now returns `TokenOverflow` rather than panicking (a change to the error enums, in the changelog).
   - **Partial:** occupancy is a `BTreeMap` (O(log k) per firing, down from a linear scan); the output is still a `Vec`, now sorted by marking. `reachability` allocations not reviewed.
-- [ ] Markov: no per-iteration clone in `stationary`; `Dtmc::rows()` copy; single reverse BFS in `can_reach` (O(n³) → O(n+m)); Padé/Horner `expm`
+- [x] Markov: no per-iteration clone in `stationary`; `Dtmc::rows()` copy; single reverse BFS in `can_reach` (O(n³) → O(n+m)); Padé/Horner `expm`
+  - **Done (2026 batch):** `expm` uses Horner's rule with 16 terms (about 1.3–1.45× faster). `as_dmatrix` no longer copies twice. `Dtmc::rows()` still returns an owned `Vec` by API design. Padé was not done, because Horner with 16 terms reaches about 1e-25 after scaling. The reverse BFS was already done in an earlier pass.
   - **Done:** `stationary` is now a direct solve (no iteration, so no per-iteration clone). Reachability is one reverse BFS, O(n²) on the dense matrix (the item's O(n+m) assumed sparse storage). Test: the existing `mean_first_passage` suite.
   - **Open:** `Dtmc::rows()` still copies; `expm` is still the 24-term Taylor series, not Padé/Horner.
-- [ ] Stats: O(n) `mser_stride` (suffix sums), O(n) `moving_average`, O(n) `quantile_ci_sorted`, memoize common t critical values
+- [x] Stats: O(n) `mser_stride` (suffix sums), O(n) `moving_average`, O(n) `quantile_ci_sorted`, memoize common t critical values
+  - **Done (2026 batch):** the t quantile's bisection stops at a 1e-12 bracket, about 45 steps instead of 200. A memo table was not added: it needs shared mutable state in a crate that is `no_std`-capable, and the early exit gets most of the gain.
   - **Done:** MSER uses backward Welford accumulation; `moving_average` uses prefix sums; `quantile_ci_sorted` computes the binomial CDF once. Measured in release on this machine (n = 200k unless noted): `moving_average` 4.4 ms → 1.2 ms; MSER stride 1 at n = 20k 133 ms → 0.15 ms; MSER stride 5 at n = 200k 533 ms → 0.39 ms. Equivalence tests: `moving_average_prefix_sums_match_direct_windows`, `mser_backward_welford_matches_direct_reference`.
   - **Open:** t critical values are not memoized.
 
@@ -195,17 +206,24 @@ Every Phase 6 fix lands with a failing-first regression test (release mode where
   - **Done:** three templates, each generated into a scratch directory with a path dependency and run. **Open:** the templates depend on `tpt-des = "0.1"`, which resolves only once the crate is published (see Phase 5); until then, substitute a path.
 - [x] `docs/` guide: getting started, choosing a crate, validating a model, FAQ, spec-vs-implementation status table
   - **Done:** `docs/` has the five pages plus an index. The status table maps every spec item to Done, Partial, or Not implemented.
-- [ ] Reconcile claims: README "AI-native"/"differentiable" vs reality; `spec.txt` phases 0–3 vs this tracker's 4–5; spec "MIT" vs shipped MIT OR Apache-2.0; CHANGELOG "Phases 0–5"
+- [x] Reconcile claims: README "AI-native"/"differentiable" vs reality; `spec.txt` phases 0–3 vs this tracker's 4–5; spec "MIT" vs shipped MIT OR Apache-2.0; CHANGELOG "Phases 0–5"
+  - **Done (2026 batch):** "AI-native" is gone from the crate descriptions and umbrella docs, as well as the README. `spec.txt`'s license line now says MIT OR Apache-2.0, and its differentiable and AI-native lines are marked cut for 0.1.x. The original design wording is kept, so the history stays visible.
   - **Done:** README wording now matches the code ("AI-native" removed; Kani and no_std claims stated precisely). `docs/status.md` records the license difference and the phase mapping.
-  - **Left for a decision:** `spec.txt` is the design document, so it is not edited. Decide whether to update it to MIT OR Apache-2.0 and to drop "AI-native" and "differentiable". The CHANGELOG entry is accurate as written.
-- [ ] Spec gaps to implement or explicitly cut: differentiable/gradient hooks (spec §5), `tpt-systems-optimisation` integration and "optimize server count" end-to-end test, multi-class routing-matrix network test
+- [~] Spec gaps to implement or explicitly cut: differentiable/gradient hooks (spec §5), `tpt-systems-optimisation` integration and "optimize server count" end-to-end test, multi-class routing-matrix network test
+  - **Decided (2026 batch):** differentiable hooks are **cut** for 0.1.x (recorded in `spec.txt` and `docs/status.md`). The `tpt-systems-optimisation` integration and its server-count test are **deferred**, as instructed. The multi-class routing-matrix network is **built** (`MultiClassClosed`), with unit-level tests. The server-count test waits on the deferred integration.
   - **Open, needs a decision:** none of these is started. Each is either a feature to build or a scope cut. `docs/status.md` lists them as Not implemented. Building them is large; the multi-class closed network is the one that unblocks the server-count test.
 
 ## Phase 10 — Proposed new features (confirm each before building)
 
-- [ ] Auto-sizing / what-if API: find minimum servers meeting an SLA (analytic bound + simulation confirmation)
-- [ ] Automatic model-validation report: simulate vs analytic (M/M/c, Jackson) with CIs, usable as a `cargo test` helper
-- [ ] Run-until-precision driver: automatic MSER warm-up + replications until CI half-width < target
-- [ ] Deterministic replay + trace export (event log, seed fingerprint → JSON/CSV/Chrome-trace); rayon-parallel replications behind `std`
+- [~] Auto-sizing / what-if API: find minimum servers meeting an SLA (analytic bound + simulation confirmation)
+  - **Partial:** `planning::size_for_mean_wait` gives the fewest servers for a mean-wait target, analytically. Simulation confirmation is `validate_mmc` on the chosen count, called by the user, not automatic. The target is a mean-wait only, not a general SLA such as a percentile.
+- [~] Automatic model-validation report: simulate vs analytic (M/M/c, Jackson) with CIs, usable as a `cargo test` helper
+  - **Partial:** `planning::validate_mmc` covers M/M/c, with `assert_passes` for tests. It reports standard errors, not confidence intervals, and the Jackson network is not covered.
+- [~] Run-until-precision driver: automatic MSER warm-up + replications until CI half-width < target
+  - **Partial:** `planning::mean_wait_to_precision` adds replications until the Student-t half-width of the mean wait meets the target. The warm-up is the caller's; MSER detection is not wired in.
+- [~] Deterministic replay + trace export (event log, seed fingerprint → JSON/CSV/Chrome-trace); rayon-parallel replications behind `std`
+  - **Partial:** `run_queue_traced` and `trace_to_csv` export one row per completed job. Not done: JSON and Chrome-trace output, a seed fingerprint, and rayon parallelism. Rayon is a new runtime dependency, so it needs a sign-off first.
 - [ ] Typed time end-to-end: `Time<Unit>` in queue/process/petri/SPN APIs instead of raw `f64`
-- [ ] Optional `serde` for configs/results; WASM playground; `tpt-des` CLI running a TOML-described queue network
+  - **Deferred:** this is a breaking change across four crates, and the metrics' units need a decision first. It should be its own change.
+- [~] Optional `serde` for configs/results; WASM playground; `tpt-des` CLI running a TOML-described queue network
+  - **Partial:** `serde` is done for result types in `tpt-des-queue` (configs hold boxed samplers and are not serializable). WASM playground and the TOML CLI are **deferred**. Both need a new crate and new dependencies, which need a decision first.

@@ -148,13 +148,14 @@ pub fn matrix_exponential(a: &DMatrix) -> DMatrix {
     }
     let small = a.clone() * (1.0 / scale);
 
-    // Taylor series: Σ Aᵏ/k!
+    // Taylor series Σ_{k≤K} Aᵏ/k!, evaluated by Horner's rule:
+    // S ← I + (A·S)/k for k = K..1. After scaling ‖A‖∞ ≤ 1/4, so the
+    // truncation error is about (1/4)^(K+1)/(K+1)!, below 1e-25 at K = 16.
+    const TERMS: usize = 16;
     let identity = DMatrix::from_diagonal(&DVector::from_fn(n, |_| 1.0));
     let mut sum = identity.clone();
-    let mut term = identity;
-    for k in 1..=24 {
-        term = term * small.clone() * (1.0 / k as f64);
-        sum = sum + term.clone();
+    for k in (1..=TERMS).rev() {
+        sum = identity.clone() + small.clone() * sum * (1.0 / k as f64);
     }
     for _ in 0..squarings {
         sum = sum.clone() * sum;

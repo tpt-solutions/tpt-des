@@ -178,6 +178,8 @@ pub enum SpnError {
     /// The horizon is NaN, infinite, or negative. An infinite horizon on a
     /// live net would never end.
     InvalidHorizon,
+    /// A firing would push a place past `u32::MAX` tokens.
+    TokenOverflow,
 }
 
 impl SpnError {
@@ -185,6 +187,7 @@ impl SpnError {
         match e {
             ReachabilityError::TooManyStates => SpnError::TooManyStates,
             ReachabilityError::InvalidInitialMarking => SpnError::InvalidInitialMarking,
+            ReachabilityError::TokenOverflow => SpnError::TokenOverflow,
         }
     }
 
@@ -207,6 +210,7 @@ impl core::fmt::Display for SpnError {
             SpnError::CtmcConversion => write!(f, "could not build the CTMC generator"),
             SpnError::NoEnabledTransition => write!(f, "no enabled transition has a positive rate"),
             SpnError::InvalidHorizon => write!(f, "horizon must be finite and non-negative"),
+            SpnError::TokenOverflow => write!(f, "firing overflows a place's token count"),
         }
     }
 }

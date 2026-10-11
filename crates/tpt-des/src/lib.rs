@@ -1,6 +1,6 @@
 //! # tpt-des
 //!
-//! A pure-Rust, AI-native discrete event simulation (DES) and stochastic
+//! A pure-Rust discrete event simulation (DES) and stochastic
 //! systems library: event scheduling, queuing theory, Petri nets, Markov
 //! chains, resource contention, process-oriented simulation, and rigorous
 //! output statistics — no C/C++ FFI, no external solvers.
@@ -66,7 +66,7 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 #[cfg(feature = "core")]
-pub use tpt_des_core as core;
+pub use tpt_des_core as kernel;
 #[cfg(feature = "markov")]
 pub use tpt_des_markov as markov;
 #[cfg(feature = "petri")]

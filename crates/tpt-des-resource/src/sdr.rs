@@ -45,7 +45,7 @@
 use crate::deadlock::WaitForGraph;
 use crate::error::ResourceError;
 use crate::pool::ResourcePool;
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -129,7 +129,12 @@ pub struct ResourceController {
     priority_queue: bool,
     /// Whether preemption is allowed (Fifo policy).
     preemptive: bool,
-    waiting: VecDeque<Waiting>,
+    /// resource → queued requests, keyed by (priority, request id). Under FIFO
+    /// the priority part is always 0, so the key order is arrival order.
+    waiting: BTreeMap<u64, BTreeMap<(i64, u64), Waiting>>,
+    /// request id → (resource, priority key), so `cancel` finds its entry
+    /// without scanning every queue.
+    waiting_index: BTreeMap<u64, (u64, i64)>,
     wait_graph: WaitForGraph,
     next_request: u64,
 }
@@ -138,7 +143,7 @@ impl fmt::Debug for ResourceController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResourceController")
             .field("pools", &self.pools)
-            .field("waiting", &self.waiting.len())
+            .field("waiting", &self.waiting_index.len())
             .finish()
     }
 }
@@ -166,7 +171,8 @@ impl ResourceController {
                 PreemptPolicy::Priority | PreemptPolicy::PreemptivePriority
             ),
             preemptive: matches!(policy, PreemptPolicy::PreemptivePriority),
-            waiting: VecDeque::new(),
+            waiting: BTreeMap::new(),
+            waiting_index: BTreeMap::new(),
             wait_graph: WaitForGraph::default(),
             next_request: 0,
         }
@@ -199,10 +205,7 @@ impl ResourceController {
 
     /// Number of requests waiting for `resource`.
     pub fn waiting_count(&self, resource: u64) -> usize {
-        self.waiting
-            .iter()
-            .filter(|w| w.resource == resource)
-            .count()
+        self.waiting.get(&resource).map_or(0, BTreeMap::len)
     }
 
     /// Read-only access to the wait-for graph.
@@ -270,24 +273,45 @@ impl ResourceController {
         // Queue the request.
         let id = RequestId(self.next_request);
         self.next_request += 1;
-        self.waiting.push_back(Waiting {
-            id: id.0,
-            entity,
-            resource: request.resource,
-            amount: request.amount,
-            priority: request.priority,
-        });
+        let key = (self.queue_priority(request.priority), id.0);
+        self.waiting.entry(request.resource).or_default().insert(
+            key,
+            Waiting {
+                id: id.0,
+                entity,
+                resource: request.resource,
+                amount: request.amount,
+                priority: request.priority,
+            },
+        );
+        self.waiting_index.insert(id.0, (request.resource, key.0));
         self.wait_graph.add_request(entity, request.resource);
         Ok(SeizeOutcome::Queued(id))
     }
 
+    /// The priority part of a waiter's queue key: its priority under the
+    /// priority policies, and 0 under FIFO so that only request ids order it.
+    fn queue_priority(&self, priority: i64) -> i64 {
+        if self.priority_queue {
+            priority
+        } else {
+            0
+        }
+    }
+
     /// True if a waiter for `resource` must be served before a new request
     /// of `priority`: any waiter under FIFO, or one at least as urgent under
-    /// the priority policies.
+    /// the priority policies. The most urgent waiter sorts first, so one
+    /// lookup decides it.
     fn blocked_by_waiters(&self, resource: u64, priority: i64) -> bool {
-        self.waiting
-            .iter()
-            .any(|w| w.resource == resource && (!self.priority_queue || w.priority <= priority))
+        match self.waiting.get(&resource).and_then(|q| q.keys().next()) {
+            None => false,
+            Some(&(head_priority, _)) => !self.priority_queue || head_priority <= priority,
+        }
+    }
+
+    fn available_units(&self, resource: u64) -> usize {
+        self.pools.get(&resource).map_or(0, ResourcePool::available)
     }
 
     fn try_take(&mut self, resource: u64, amount: usize) -> bool {
@@ -395,45 +419,26 @@ impl ResourceController {
     /// priority; pure FIFO otherwise). Returns the entities granted.
     pub fn grant_ready(&mut self, resource: u64) -> Vec<u64> {
         let mut granted = Vec::new();
-        loop {
-            let mut best: Option<(usize, &Waiting)> = None;
-            for (idx, w) in self.waiting.iter().enumerate() {
-                if w.resource != resource {
-                    continue;
-                }
-                let available = self
-                    .pools
-                    .get(&resource)
-                    .map(|p| p.available())
-                    .unwrap_or(0);
-                if w.amount > available {
-                    continue;
-                }
-                let better = match best {
-                    None => true,
-                    Some((_, b)) => {
-                        if self.priority_queue {
-                            (w.priority, w.id) < (b.priority, b.id)
-                        } else {
-                            w.id < b.id
-                        }
-                    }
-                };
-                if better {
-                    best = Some((idx, w));
-                }
-            }
-            let Some((idx, _)) = best else { break };
-            let w = self.waiting.remove(idx).expect("index from live scan");
-            if self.try_take(w.resource, w.amount) {
-                self.record_hold(w.entity, w.resource, w.amount);
-                self.wait_graph.remove_request(w.entity, w.resource);
+        let Some(queue) = self.waiting.remove(&resource) else {
+            return granted;
+        };
+        // One pass in grant order. Availability only falls during the pass, so
+        // a waiter that does not fit now cannot fit later in the same call.
+        // Granting in key order therefore picks the same waiters as repeatedly
+        // choosing the most urgent satisfiable one.
+        let mut kept = BTreeMap::new();
+        for (key, w) in queue {
+            if w.amount <= self.available_units(resource) && self.try_take(resource, w.amount) {
+                self.record_hold(w.entity, resource, w.amount);
+                self.wait_graph.remove_request(w.entity, resource);
+                self.waiting_index.remove(&w.id);
                 granted.push(w.entity);
             } else {
-                // Availability was just checked; unreachable in practice.
-                self.waiting.insert(idx, w);
-                break;
+                kept.insert(key, w);
             }
+        }
+        if !kept.is_empty() {
+            self.waiting.insert(resource, kept);
         }
         granted
     }
@@ -442,15 +447,22 @@ impl ResourceController {
     /// still waiting. Pending evictions are unaffected — preemption is
     /// immediate by design.
     pub fn cancel(&mut self, entity: u64, id: RequestId) -> bool {
-        let Some(idx) = self
-            .waiting
-            .iter()
-            .position(|w| w.entity == entity && w.id == id.0)
-        else {
+        let Some(&(resource, priority)) = self.waiting_index.get(&id.0) else {
             return false;
         };
-        let w = self.waiting.remove(idx).expect("index from live scan");
-        self.wait_graph.remove_request(entity, w.resource);
+        let Some(queue) = self.waiting.get_mut(&resource) else {
+            return false;
+        };
+        match queue.get(&(priority, id.0)) {
+            Some(w) if w.entity == entity => {}
+            _ => return false,
+        }
+        queue.remove(&(priority, id.0));
+        if queue.is_empty() {
+            self.waiting.remove(&resource);
+        }
+        self.waiting_index.remove(&id.0);
+        self.wait_graph.remove_request(entity, resource);
         true
     }
 }

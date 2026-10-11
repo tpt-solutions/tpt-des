@@ -19,6 +19,38 @@ fn mm1_config(lambda: f64, mu: f64, discipline: Discipline) -> QueueConfig {
     }
 }
 
+/// Independent replications averaged for the steady-state checks. One run is
+/// too noisy near ρ = 0.95 to support a tight tolerance; the mean of five
+/// independent seeds is not.
+const REPLICATIONS: u64 = 5;
+
+/// Mean of `metrics` over `REPLICATIONS` seeds, as (Wq, W, L, ρ).
+fn replicated_means(
+    lambda: f64,
+    mu: f64,
+    discipline: Discipline,
+    horizon: f64,
+    warmup: f64,
+    seed: u64,
+) -> [f64; 4] {
+    let mut sums = [0.0; 4];
+    for i in 0..REPLICATIONS {
+        let m = run_queue(
+            mm1_config(lambda, mu, discipline),
+            horizon,
+            warmup,
+            seed.wrapping_add(i),
+        );
+        // Need enough completions in each replication for a meaningful sample.
+        assert!(m.completed > 1_000, "too few completions: {}", m.completed);
+        sums[0] += m.mean_wait();
+        sums[1] += m.mean_sojourn();
+        sums[2] += m.time_avg_number();
+        sums[3] += m.utilization();
+    }
+    sums.map(|s| s / REPLICATIONS as f64)
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
 
@@ -33,23 +65,19 @@ proptest! {
         let load_scale = 1.0 / (1.0 - rho.sqrt()).max(1e-3);
         let horizon = 40_000.0 * load_scale.min(25.0);
         let warmup = horizon / 10.0;
-        let metrics = run_queue(mm1_config(lambda, mu, Discipline::Fifo), horizon, warmup, seed);
+        let [wq, w, l, util] =
+            replicated_means(lambda, mu, Discipline::Fifo, horizon, warmup, seed);
         let exact = mm1(lambda, mu).unwrap();
 
-        // Need enough completions for a meaningful comparison.
-        prop_assert!(metrics.completed > 1_000, "too few completions: {}", metrics.completed);
-
-        // Relative tolerance is loose (a single run is noisy, especially near
-        // ρ = 0.95) but far tighter than "same order of magnitude".
+        // Tolerance on the replication mean: 10% for the waiting and number
+        // metrics, 5% for utilization, which is a much less noisy estimator.
         let rel = |a: f64, b: f64| (a - b).abs() / b.abs().max(1e-9);
-        prop_assert!(rel(metrics.mean_wait(), exact.wq) < 0.30,
-            "Wq sim {} vs analytic {} (lambda={}, mu={})", metrics.mean_wait(), exact.wq, lambda, mu);
-        prop_assert!(rel(metrics.mean_sojourn(), exact.w) < 0.30,
-            "W sim {} vs analytic {}", metrics.mean_sojourn(), exact.w);
-        prop_assert!(rel(metrics.time_avg_number(), exact.l) < 0.30,
-            "L sim {} vs analytic {}", metrics.time_avg_number(), exact.l);
-        prop_assert!(rel(metrics.utilization(), exact.rho) < 0.10,
-            "utilization sim {} vs analytic {}", metrics.utilization(), exact.rho);
+        prop_assert!(rel(wq, exact.wq) < 0.10,
+            "Wq sim {} vs analytic {} (lambda={}, mu={})", wq, exact.wq, lambda, mu);
+        prop_assert!(rel(w, exact.w) < 0.10, "W sim {} vs analytic {}", w, exact.w);
+        prop_assert!(rel(l, exact.l) < 0.10, "L sim {} vs analytic {}", l, exact.l);
+        prop_assert!(rel(util, exact.rho) < 0.05,
+            "utilization sim {} vs analytic {}", util, exact.rho);
     }
 
     #[test]
@@ -96,16 +124,18 @@ fn processor_sharing_matches_mm1_mean_sojourn() {
     // M/M/1-PS has the same mean sojourn as M/M/1-FCFS (insensitivity).
     let (lambda, mu) = (0.6, 1.0);
     let exact = mm1(lambda, mu).unwrap();
-    let metrics = run_queue(
-        mm1_config(lambda, mu, Discipline::ProcessorSharing),
+    let [_, w, _, _] = replicated_means(
+        lambda,
+        mu,
+        Discipline::ProcessorSharing,
         40_000.0,
         4_000.0,
         7,
     );
     assert!(
-        (metrics.mean_sojourn() - exact.w).abs() / exact.w < 0.25,
+        (w - exact.w).abs() / exact.w < 0.10,
         "PS sojourn {} vs FCFS analytic {}",
-        metrics.mean_sojourn(),
+        w,
         exact.w
     );
 }
@@ -119,11 +149,11 @@ fn fifo_lifo_agree_on_mean_sojourn() {
     let (lambda, mu) = (0.6, 1.0);
     let exact = mm1(lambda, mu).unwrap();
     for d in [Discipline::Fifo, Discipline::Lifo] {
-        let m = run_queue(mm1_config(lambda, mu, d), 40_000.0, 4_000.0, 11);
+        let [_, w, _, _] = replicated_means(lambda, mu, d, 40_000.0, 4_000.0, 11);
         assert!(
-            (m.mean_sojourn() - exact.w).abs() / exact.w < 0.25,
+            (w - exact.w).abs() / exact.w < 0.10,
             "{d:?}: sojourn {} vs analytic {}",
-            m.mean_sojourn(),
+            w,
             exact.w
         );
     }

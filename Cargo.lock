@@ -746,6 +746,7 @@ name = "tpt-des-queue"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "serde",
  "tpt-des-core",
  "tpt-des-stats",
  "tpt-des-verify",

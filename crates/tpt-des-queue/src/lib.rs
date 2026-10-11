@@ -5,7 +5,8 @@
 //! * Closed-form solutions ([`analytic`]): M/M/1, M/M/c, M/G/1
 //!   (Pollaczek–Khinchine), and Erlang B/C loss formulas.
 //! * Networks of queues ([`network`]): open Jackson networks with routing
-//!   matrices, and single-chain closed networks solved by mean value analysis.
+//!   matrices, and closed networks solved by mean value analysis: single-chain
+//!   ([`network`]) and multi-class ([`multiclass`]).
 //! * Discrete-event simulation ([`sim`]): single-station queues with
 //!   arbitrary inter-arrival and service distributions under FIFO, LIFO,
 //!   priority, and processor-sharing disciplines.
@@ -19,13 +20,17 @@
 
 pub mod analytic;
 pub mod error;
+pub mod multiclass;
 pub mod network;
+pub mod planning;
 pub mod sim;
 
 pub use analytic::{erlang_b, erlang_c, mg1, mm1, mm1_pn, mmc, Mg1Result, Mm1Result, MmcResult};
 pub use error::QueueError;
+pub use multiclass::{ClassSpec, MultiClassClosed, MultiClassResult};
 pub use network::{ClosedNetwork, JacksonNetwork};
+pub use planning::{mean_wait_to_precision, size_for_mean_wait, validate_mmc, ValidationReport};
 pub use sim::{
-    run_queue, Discipline, Exponential, QueueConfig, QueueEvent, QueueMetrics, RateSampler,
-    SimQueue,
+    run_queue, run_queue_multi, run_queue_traced, trace_to_csv, Discipline, Exponential, JobRecord,
+    QueueConfig, QueueEvent, QueueMetrics, RateSampler, SimQueue,
 };

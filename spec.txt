@@ -1,9 +1,9 @@
 tpt-des Design Specification (spec.txt)
 1. Overview
 Name: tpt-des
-Description: A pure-Rust, AI-native Discrete Event Simulation (DES) and stochastic systems library. It provides event scheduling, queuing theory, Petri nets, Markov chains, resource contention modeling, and process-oriented simulation without C/C++ FFI or external solver dependencies.
-License: MIT (all dependencies must be MIT or compatible; no Apache-2.0-only crates).
-Core Philosophy: Unit-safe, no_std + alloc compatible at the core, differentiable for gradient-based system optimization, and mathematically rigorous via native Rust verification tooling and from-scratch implementations.
+Description: A pure-Rust Discrete Event Simulation (DES) and stochastic systems library. It provides event scheduling, queuing theory, Petri nets, Markov chains, resource contention modeling, and process-oriented simulation without C/C++ FFI or external solver dependencies.
+License: MIT OR Apache-2.0 (dual; this header said MIT in the original design. All dependencies must be MIT or compatible; no Apache-2.0-only crates).
+Core Philosophy: Unit-safe, no_std + alloc compatible at the core, differentiable for gradient-based system optimization (cut from 0.1.x; see docs/status.md), and mathematically rigorous via native Rust verification tooling and from-scratch implementations.
 2. Design Principles
 Zero External Solver Dependencies: No SimPy FFI, no Arena, no AnyLogic bindings. All event calendars, priority queues, stochastic samplers, and matrix exponentials (for Markov chains) are implemented from scratch in pure Rust, leveraging tpt-math and tpt-systems-optimisation.
 Strict Licensing: No Apache-2.0-only dependencies. The workspace strictly uses MIT, MIT/Apache-2.0 dual, or custom in-house crates.
@@ -98,7 +98,7 @@ tpt-systems-optimisation: tpt-des provides the simulation environment; tpt-syste
 tpt-swarm: tpt-des models task scheduling, communication delays, and resource contention in multi-agent systems. tpt-swarm provides the agent behaviors.
 tpt-robotics: Hybrid simulation combining discrete event logic (task sequencing, battery swaps) with continuous dynamics (tpt-multibody-dynamics) for factory floor digital twins.
 tpt-control: Enables hybrid discrete-continuous simulation where discrete events (e.g., "machine failure") trigger continuous state changes (e.g., "production line slows down").
-AI-Native Agents: Differentiable simulation hooks allow tpt-eve / tpt-anima agents to perform gradient-based policy optimization (e.g., learning optimal dispatch rules via reinforcement learning against the DES environment).
+AI-Native Agents (cut from 0.1.x; see docs/status.md): Differentiable simulation hooks allow tpt-eve / tpt-anima agents to perform gradient-based policy optimization (e.g., learning optimal dispatch rules via reinforcement learning against the DES environment).
 6. Phased Rollout (todo.md Alignment)
 Phase 0: Foundation & Event Engine (Weeks 1-3)
 Scaffold workspace with strict dependency linting.

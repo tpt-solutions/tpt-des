@@ -140,3 +140,45 @@ fn buffer_refuses_nan_amounts() {
     assert_eq!(b.level(), 4.0);
     assert_eq!(b.pour_duration(f64::NAN, 1.0), None);
 }
+
+/// Per-resource queues must keep the grant order the single queue had:
+/// urgent waiters first, then arrival order within a priority, skipping any
+/// waiter too large for the free units. Cancelling one waiter leaves the rest
+/// in place, and `waiting_count` tracks each resource separately.
+#[test]
+fn per_resource_queues_keep_grant_order_and_cancel() {
+    let mut rc = ResourceController::with_policy(PreemptPolicy::Priority);
+    rc.add_pool(0, 3).unwrap();
+    rc.add_pool(1, 1).unwrap();
+    rc.seize(0, SeizeRequest::new(0, 3)).unwrap(); // holds all of resource 0
+    rc.seize(9, SeizeRequest::new(1, 1)).unwrap(); // unrelated resource
+
+    // Arrival order: A(2 units, prio 0), B(1 unit, prio 0), C(1 unit, prio -1).
+    let a = match rc.seize(1, SeizeRequest::new(0, 2)).unwrap() {
+        SeizeOutcome::Queued(id) => id,
+        other => panic!("expected queued, got {other:?}"),
+    };
+    let SeizeOutcome::Queued(_) = rc.seize(2, SeizeRequest::new(0, 1)).unwrap() else {
+        panic!("expected queued")
+    };
+    let SeizeOutcome::Queued(_) = rc
+        .seize(3, SeizeRequest::new(0, 1).with_priority(-1))
+        .unwrap()
+    else {
+        panic!("expected queued")
+    };
+    assert_eq!(rc.waiting_count(0), 3);
+    assert_eq!(rc.waiting_count(1), 0);
+
+    // Cancel A: the remaining two stay queued in urgency order.
+    assert!(rc.cancel(1, a));
+    assert!(
+        !rc.cancel(1, a),
+        "a cancelled request cannot be cancelled twice"
+    );
+    assert_eq!(rc.waiting_count(0), 2);
+
+    // Releasing all 3 units grants C (urgent) then B, in that order.
+    assert_eq!(rc.release(0, 0).unwrap(), vec![3, 2]);
+    assert_eq!(rc.waiting_count(0), 0);
+}

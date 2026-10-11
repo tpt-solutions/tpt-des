@@ -2,10 +2,14 @@
 //!
 //! The calendar is a binary heap ordered by `(time, priority, insertion
 //! sequence)` — earliest time first, then lowest priority number first, then
-//! FIFO among equal `(time, priority)` pairs. Both [`schedule_at`] and
-//! [`cancel`] run in `O(log n)`; popping runs in amortized `O(log n)` using
-//! *lazy cancellation*: a cancelled event is tombstoned and discarded when it
+//! FIFO among equal `(time, priority)` pairs. [`schedule_at`] is `O(log n)`
+//! and [`cancel`] is `O(1)`. Popping is amortized `O(log n)`, using *lazy
+//! cancellation*: a cancelled event is tombstoned and discarded when it
 //! surfaces from the heap, rather than being searched for and repaired.
+//!
+//! Each scheduled event occupies a slot in a slab. An [`EventId`] names a slot
+//! and a generation, so a stale handle (already fired, cancelled, or whose slot
+//! has been reused) is recognised and rejected in constant time.
 //!
 //! [`schedule_at`]: EventCalendar::schedule_at
 //! [`cancel`]: EventCalendar::cancel
@@ -35,21 +39,53 @@
 
 use crate::entity::EntityId;
 use crate::time::Time;
-use alloc::collections::{BTreeSet, BinaryHeap};
+use alloc::collections::BinaryHeap;
+use alloc::vec::Vec;
 use core::fmt;
 use core::marker::PhantomData;
 
 /// A handle to a scheduled event, usable for cancellation.
 ///
-/// Handles are only meaningful within the calendar that produced them.
+/// Handles are only meaningful within the calendar that produced them. The
+/// raw value packs the slot index (low 32 bits) and the slot's generation
+/// (high 32 bits).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EventId(pub(crate) u64);
 
 impl EventId {
+    fn new(slot: u32, gen: u32) -> Self {
+        EventId((u64::from(gen) << 32) | u64::from(slot))
+    }
+
+    fn slot(self) -> usize {
+        (self.0 & u64::from(u32::MAX)) as usize
+    }
+
+    fn gen(self) -> u32 {
+        (self.0 >> 32) as u32
+    }
+
     /// The raw numeric id (useful for tracing / deterministic replay logs).
     pub fn raw(self) -> u64 {
         self.0
     }
+}
+
+/// What a slot currently holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlotState {
+    /// Not in use. The slot is on the free list.
+    Free,
+    /// Scheduled and live: its heap entry will fire.
+    Pending,
+    /// Cancelled: its heap entry is a tombstone, discarded when it surfaces.
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Slot {
+    gen: u32,
+    state: SlotState,
 }
 
 /// One entry in the heap.
@@ -61,7 +97,8 @@ struct HeapEntry<E> {
     time: f64,
     priority: u8,
     seq: u64,
-    id: u64,
+    slot: u32,
+    gen: u32,
     target: EntityId,
     payload: E,
 }
@@ -111,14 +148,19 @@ pub struct Popped<E> {
 /// Generic over the time unit (phantom type) and the event payload `E`.
 /// Every event carries a [`target`](EntityId) — the entity it is addressed
 /// to — so the simulation loop can dispatch without re-sorting anything.
+///
+/// Invariant: every heap entry corresponds to exactly one slot in
+/// `Pending` or `Cancelled` state, and the slot is released only when that
+/// entry leaves the heap. So `live` counts the `Pending` slots and the
+/// `Cancelled` slots are the tombstones still in the heap.
 pub struct EventCalendar<Unit, E> {
     heap: BinaryHeap<HeapEntry<E>>,
-    /// Ids currently resident in the heap (pending, not yet fired/cancelled).
-    pending: BTreeSet<u64>,
-    /// Tombstones: ids cancelled while still pending.
-    cancelled: BTreeSet<u64>,
+    slots: Vec<Slot>,
+    /// Indices of `Free` slots, reused before the slab grows.
+    free: Vec<u32>,
+    /// Number of `Pending` slots (scheduled and not cancelled).
+    live: usize,
     next_seq: u64,
-    next_id: u64,
     _unit: PhantomData<fn() -> Unit>,
 }
 
@@ -130,7 +172,7 @@ where
         f.debug_struct("EventCalendar")
             .field("live", &self.live_len())
             .field("heap_entries", &self.heap.len())
-            .field("cancelled_pending", &self.cancelled.len())
+            .field("cancelled_pending", &(self.heap.len() - self.live))
             .finish()
     }
 }
@@ -146,10 +188,10 @@ impl<Unit, E> EventCalendar<Unit, E> {
     pub fn new() -> Self {
         Self {
             heap: BinaryHeap::new(),
-            pending: BTreeSet::new(),
-            cancelled: BTreeSet::new(),
+            slots: Vec::new(),
+            free: Vec::new(),
+            live: 0,
             next_seq: 0,
-            next_id: 0,
             _unit: PhantomData,
         }
     }
@@ -159,12 +201,12 @@ impl<Unit, E> EventCalendar<Unit, E> {
     /// Cancelled entries that have not yet been lazily discarded still sit in
     /// the heap but are excluded from this count.
     pub fn live_len(&self) -> usize {
-        self.heap.len() - self.cancelled.len()
+        self.live
     }
 
     /// True if no live events remain.
     pub fn is_empty(&self) -> bool {
-        self.live_len() == 0
+        self.live == 0
     }
 
     /// Total entries physically in the heap, including cancelled tombstones
@@ -184,33 +226,85 @@ impl<Unit, E> EventCalendar<Unit, E> {
         target: EntityId,
         payload: E,
     ) -> EventId {
-        let id = self.next_id;
-        self.next_id += 1;
+        let slot = match self.free.pop() {
+            Some(s) => s,
+            None => {
+                let s = u32::try_from(self.slots.len())
+                    .expect("event calendar holds at most 2^32 slots");
+                self.slots.push(Slot {
+                    gen: 0,
+                    state: SlotState::Free,
+                });
+                s
+            }
+        };
+        let entry_slot = &mut self.slots[slot as usize];
+        entry_slot.state = SlotState::Pending;
+        let gen = entry_slot.gen;
+
         let seq = self.next_seq;
         self.next_seq += 1;
         self.heap.push(HeapEntry {
             time: time.raw(),
             priority: PRIORITY,
             seq,
-            id,
+            slot,
+            gen,
             target,
             payload,
         });
-        self.pending.insert(id);
-        EventId(id)
+        self.live += 1;
+        EventId::new(slot, gen)
     }
 
-    /// Cancel a pending event. `O(log n)`.
+    /// Cancel a pending event. `O(1)`.
     ///
     /// Returns `true` if the event was pending and is now cancelled; `false`
     /// if it had already fired or was already cancelled. Cancellation is lazy:
     /// the tombstoned entry is discarded when it surfaces from the heap.
     pub fn cancel(&mut self, id: EventId) -> bool {
-        if self.pending.remove(&id.0) {
-            self.cancelled.insert(id.0);
-            true
-        } else {
-            false
+        match self.slots.get_mut(id.slot()) {
+            Some(s) if s.gen == id.gen() && s.state == SlotState::Pending => {
+                s.state = SlotState::Cancelled;
+                self.live -= 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Free `slot` for reuse and bump its generation, so every outstanding
+    /// handle to it goes stale.
+    fn release(&mut self, slot: u32) {
+        let s = &mut self.slots[slot as usize];
+        s.gen = s.gen.wrapping_add(1);
+        s.state = SlotState::Free;
+        self.free.push(slot);
+    }
+
+    /// Remove the heap's top entry. Returns it if it is live, or `None` after
+    /// discarding a tombstone. Callers loop over tombstones.
+    fn take_top(&mut self) -> Option<HeapEntry<E>> {
+        let entry = self.heap.pop()?;
+        let state = self.slots[entry.slot as usize].state;
+        self.release(entry.slot);
+        match state {
+            SlotState::Pending => {
+                self.live -= 1;
+                Some(entry)
+            }
+            SlotState::Cancelled => None,
+            SlotState::Free => unreachable!("a heap entry always owns its slot"),
+        }
+    }
+
+    fn popped(entry: HeapEntry<E>) -> Popped<E> {
+        Popped {
+            time: entry.time,
+            priority: entry.priority,
+            id: EventId::new(entry.slot, entry.gen),
+            target: entry.target,
+            payload: entry.payload,
         }
     }
 
@@ -220,36 +314,28 @@ impl<Unit, E> EventCalendar<Unit, E> {
     /// `(time, priority, seq)`) is proved for small schedules by the Kani
     /// harnesses in `tpt-des-verify`.
     pub fn pop(&mut self) -> Option<Popped<E>> {
-        loop {
-            let entry = self.heap.pop()?;
-            if self.cancelled.remove(&entry.id) {
-                continue; // tombstone: discard lazily
+        while !self.heap.is_empty() {
+            if let Some(live) = self.take_top() {
+                return Some(Self::popped(live));
             }
-            self.pending.remove(&entry.id);
-            return Some(Popped {
-                time: entry.time,
-                priority: entry.priority,
-                id: EventId(entry.id),
-                target: entry.target,
-                payload: entry.payload,
-            });
         }
+        None
     }
 
     /// Time of the next live (non-cancelled) event, without consuming it.
     ///
     /// Discards tombstones that have surfaced at the top of the heap (and
-    /// forgets their ids, keeping [`live_len`](Self::live_len) consistent);
+    /// frees their slots, keeping [`live_len`](Self::live_len) consistent);
     /// amortized `O(log n)`.
     pub fn next_time(&mut self) -> Option<f64> {
-        while let Some(entry) = self.heap.peek() {
-            if self.cancelled.remove(&entry.id) {
-                self.heap.pop(); // tombstone: discard
+        loop {
+            let top = self.heap.peek()?;
+            if self.slots[top.slot as usize].state == SlotState::Cancelled {
+                let _ = self.take_top();
                 continue;
             }
-            return Some(entry.time);
+            return Some(top.time);
         }
-        None
     }
 
     /// Like [`pop`](Self::pop), but never returns events scheduled after
@@ -257,21 +343,13 @@ impl<Unit, E> EventCalendar<Unit, E> {
     /// heap. Used by `Simulation::run_until` to bound a run in time.
     pub fn pop_until(&mut self, max_time: f64) -> Option<Popped<E>> {
         loop {
-            if self.heap.peek()?.time > max_time {
+            let top = self.heap.peek()?;
+            if top.time > max_time {
                 return None;
             }
-            let entry = self.heap.pop()?;
-            if self.cancelled.remove(&entry.id) {
-                continue; // tombstone: discard lazily
+            if let Some(live) = self.take_top() {
+                return Some(Self::popped(live));
             }
-            self.pending.remove(&entry.id);
-            return Some(Popped {
-                time: entry.time,
-                priority: entry.priority,
-                id: EventId(entry.id),
-                target: entry.target,
-                payload: entry.payload,
-            });
         }
     }
 }
@@ -366,15 +444,39 @@ mod tests {
     }
 
     #[test]
+    fn stale_handle_cannot_cancel_a_reused_slot() {
+        let mut c = cal();
+        let old = c.schedule_at::<0>(Time::from_raw(1.0), A, 1);
+        assert_eq!(c.pop().unwrap().payload, 1); // frees the slot
+        let new = c.schedule_at::<0>(Time::from_raw(2.0), A, 2); // reuses it
+        assert_ne!(old, new, "reused slot must issue a new generation");
+        assert!(!c.cancel(old), "stale handle must not cancel the new event");
+        assert_eq!(c.live_len(), 1);
+        assert_eq!(c.pop().unwrap().payload, 2);
+    }
+
+    #[test]
+    fn tombstone_slot_is_not_reused_before_it_surfaces() {
+        let mut c = cal();
+        let doomed = c.schedule_at::<0>(Time::from_raw(5.0), A, 5);
+        assert!(c.cancel(doomed));
+        // The tombstone still owns its slot, so this must get a new one.
+        let other = c.schedule_at::<0>(Time::from_raw(1.0), A, 1);
+        assert_ne!(doomed.slot(), other.slot());
+        assert_eq!(c.pop().unwrap().payload, 1);
+        assert!(c.pop().is_none());
+    }
+
+    #[test]
     fn live_len_accounts_for_lazy_tombstones() {
         let mut c = cal();
-        for t in 0..10 {
-            c.schedule_at::<0>(Time::from_raw(t as f64), A, t);
-        }
+        let ids: Vec<EventId> = (0..10)
+            .map(|t| c.schedule_at::<0>(Time::from_raw(t as f64), A, t))
+            .collect();
         assert_eq!(c.live_len(), 10);
-        // Cancel the first five scheduled (ids 0..5) — they fire at times 0..5.
-        for id in 0..5 {
-            assert!(c.cancel(EventId(id)));
+        // Cancel the first five scheduled — they fire at times 0..5.
+        for id in &ids[..5] {
+            assert!(c.cancel(*id));
         }
         assert_eq!(c.live_len(), 5);
         assert_eq!(c.heap_len(), 10);

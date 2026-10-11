@@ -160,3 +160,39 @@ fn network_with_zero_external_node_has_zero_rate_not_error() {
     assert!((lambda[0] - 1.0).abs() < 1e-12);
     assert_eq!(lambda[1], 0.5);
 }
+
+/// With every job in one priority class, the heap-based priority line must
+/// serve in arrival order, exactly as FIFO does. The priority closure draws no
+/// randomness, so both runs see the same random stream.
+#[test]
+fn single_class_priority_matches_fifo_exactly() {
+    let (lambda, mu) = (0.7, 1.0);
+    let same_class = QueueConfig {
+        priority: Some(Box::new(|_| 0)),
+        ..mm1(lambda, mu, Discipline::Priority)
+    };
+    let prio = run_queue(same_class, 20_000.0, 2_000.0, 5);
+    let fifo = run_queue(mm1(lambda, mu, Discipline::Fifo), 20_000.0, 2_000.0, 5);
+    assert_eq!(prio, fifo);
+}
+
+/// Under processor sharing the server is busy whenever anything is in
+/// service. `utilization` used to add the job count, so it returned the mean
+/// number in system (about ρ/(1−ρ) = 1.5 at ρ = 0.6) instead of ρ.
+#[test]
+fn processor_sharing_utilization_is_busy_fraction_not_population() {
+    let (lambda, mu) = (0.6, 1.0);
+    let m = run_queue(
+        mm1(lambda, mu, Discipline::ProcessorSharing),
+        40_000.0,
+        4_000.0,
+        9,
+    );
+    let rho = lambda / mu;
+    assert!(
+        (m.utilization() - rho).abs() < 0.02,
+        "PS utilization {} should be ≈ ρ = {rho}",
+        m.utilization()
+    );
+    assert!(m.utilization() <= 1.0);
+}

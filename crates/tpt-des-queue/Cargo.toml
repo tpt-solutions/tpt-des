@@ -19,15 +19,17 @@ tpt-math-prob-core = { workspace = true }
 tpt-math-prob-dist = { workspace = true }
 tpt-math-prob-sampler = { workspace = true }
 tpt-math-linalg-dense = { workspace = true }
+tpt-des-stats = { workspace = true, default-features = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 tpt-des-verify = { workspace = true }
-tpt-des-stats = { workspace = true, default-features = true }
 proptest = { workspace = true }
 
 [features]
 default = ["std"]
 std = ["alloc", "tpt-des-core/std", "tpt-math-prob-core/std", "tpt-math-prob-dist/std", "tpt-math-prob-sampler/std", "tpt-math-linalg-dense/std"]
+serde = ["dep:serde"]
 alloc = ["tpt-des-core/alloc", "tpt-math-prob-core/alloc", "tpt-math-prob-dist/alloc", "tpt-math-prob-sampler/alloc", "tpt-math-linalg-dense/alloc"]
 
 [lints]

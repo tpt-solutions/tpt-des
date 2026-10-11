@@ -23,7 +23,9 @@ the spec item is implemented. *Not implemented* means no code exists for it.
 |---|---|---|
 | Closed forms: M/M/1, M/M/c, M/G/1, Erlang B/C | Done | `analytic`; Erlang C is computed in log space, so large `c` is safe |
 | Jackson networks | Done | `JacksonNetwork` (open networks with routing matrices) |
-| Closed networks with routing matrices | Partial | Single-chain closed networks by exact MVA (`ClosedNetwork`). Multi-class closed networks are not implemented. |
+| Closed networks with routing matrices | Done | Single-chain by exact MVA (`ClosedNetwork`). Multi-class by exact MVA over the population lattice (`MultiClassClosed`), with visit ratios from each class's routing matrix. The lattice is capped at `MAX_STATES` (100 000). Exact for processor-sharing nodes, and for FCFS nodes with exponential service that is the same across classes. |
+| Multi-server simulation and capacity planning | Done | `run_queue_multi` runs c servers. `planning::size_for_mean_wait` gives the fewest servers that meet a mean-wait target. `planning::validate_mmc` compares simulation with M/M/c. `planning::mean_wait_to_precision` adds replications until the CI half-width meets a target. Processor sharing is single-server only. |
+| Job-level trace export | Done | `run_queue_traced` and `trace_to_csv` (one row per completed job). JSON and Chrome-trace output are not implemented. |
 | DES queues with arbitrary distributions | Done | `RateSampler`; `FromClosure` takes any distribution |
 | FIFO, LIFO, priority, processor sharing | Done | Priority classes come from `QueueConfig::priority`. Before the Phase 6 fixes, priority behaved as FIFO. |
 
@@ -89,14 +91,14 @@ non-blocking job. Run `just kani` to check them locally.
 
 | Spec item | Status | Where / notes |
 |---|---|---|
-| Gradient or differentiable hooks (§1, §5) | Not implemented | No code and no design |
-| `tpt-systems-optimisation` integration (server-count optimization) | Not implemented | Needs the sibling crate and a multi-class network |
-| End-to-end multi-class network test (Phase 3 in the spec) | Not implemented | Depends on multi-class closed networks |
+| Gradient or differentiable hooks (§1, §5) | Cut for 0.1.x | No code and no design. Scope decision, recorded in `spec.txt`. |
+| `tpt-systems-optimisation` integration (server-count optimization) | Deferred | Out of scope for this pass. The single-server and multi-class solvers it would call now exist. |
+| End-to-end multi-class network test (Phase 3 in the spec) | Partial | Unit-level checks: a single class matches the single-chain MVA, customer counts are conserved, identical classes aggregate correctly, and routing is validated. The server-count optimization test is deferred with the integration above. |
 | `tpt-swarm`, `tpt-robotics`, `tpt-eve` / `tpt-anima` | Not implemented | Named in the spec as ecosystem integrations, outside this repository |
 
 ## Licensing
 
-The spec's header says *MIT*. The crates ship as **MIT OR Apache-2.0**. The
-dependency policy (no Apache-2.0-only crates, enforced by `cargo deny`) is the
-same in both. `spec.txt` has not been edited, because it is the design
-document.
+The crates ship as **MIT OR Apache-2.0**, and `spec.txt`'s license line now says
+the same (the original design said *MIT*). The dependency policy (no
+Apache-2.0-only crates, enforced by `cargo deny`) is unchanged. The spec's
+differentiable and "AI-native" wording is marked as cut for 0.1.x.

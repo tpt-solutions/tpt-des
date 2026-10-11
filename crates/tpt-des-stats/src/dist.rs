@@ -124,8 +124,9 @@ pub fn student_t_cdf(t: f64, df: f64) -> f64 {
     }
 }
 
-/// Student-t quantile (inverse CDF) by bisection — monotone and robust,
-/// ~1e-10 accurate after ~110 iterations over a wide bracket.
+/// Student-t quantile (inverse CDF) by bisection — monotone and robust.
+/// The bracket starts at ±10⁶ and halves until its width is below
+/// `1e-12·max(1, |t|)`, about 45 halvings, each one CDF evaluation.
 #[must_use]
 pub fn student_t_ppf(p: f64, df: f64) -> f64 {
     if !(0.0..=1.0).contains(&p) || df.is_nan() || df <= 0.0 {
@@ -140,9 +141,12 @@ pub fn student_t_ppf(p: f64, df: f64) -> f64 {
     if (p - 0.5).abs() < 1e-15 {
         return 0.0;
     }
-    let (mut lo, mut hi) = (-1.0e6, 1.0e6);
+    let (mut lo, mut hi): (f64, f64) = (-1.0e6, 1.0e6);
     for _ in 0..200 {
         let mid = 0.5 * (lo + hi);
+        if hi - lo <= 1e-12 * mid.abs().max(1.0) {
+            break;
+        }
         if student_t_cdf(mid, df) < p {
             lo = mid;
         } else {

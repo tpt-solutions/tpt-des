@@ -17,6 +17,9 @@ pub enum QueueError {
     /// The linear solve for node arrival rates failed to converge to a
     /// finite solution (e.g. the routing matrix has spectral radius ≥ 1).
     NoTrafficSolution,
+    /// The population lattice of a multi-class MVA exceeds the state bound
+    /// (the product of `N_c + 1` over classes).
+    StateSpaceTooLarge,
 }
 
 impl fmt::Display for QueueError {
@@ -33,6 +36,9 @@ impl fmt::Display for QueueError {
                 write!(f, "routing matrix is malformed or sub-row-stochastic")
             }
             QueueError::NoTrafficSolution => write!(f, "traffic equations have no finite solution"),
+            QueueError::StateSpaceTooLarge => {
+                write!(f, "multi-class population lattice exceeds the state bound")
+            }
         }
     }
 }

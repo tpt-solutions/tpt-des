@@ -54,7 +54,7 @@ jobs:
       - run: cargo run --release -p tpt-des --example markov_absorption --features "std markov"
       - run: cargo run --release -p tpt-des --example spn_reachability --features "std petri"
       - run: cargo run --release -p tpt-des --example deadlock_detection --features "std resource"
-      - run: cargo run --release -p tpt-des --example process_bank_teller --features "std process"
+      - run: cargo run --release -p tpt-des --example process_bank_teller --features "std process queue"
       - run: cargo run --release -p tpt-des --example stats_replications --features "std queue stats"
       - run: cargo run --release -p tpt-des --example hybrid_bridge --features "std process"
       - run: cargo run --release -p tpt-des --example call_center_erlang --features "std queue"
@@ -94,6 +94,33 @@ jobs:
       - run: cargo build -p tpt-des-core --no-default-features --target wasm32-unknown-unknown
       - run: cargo build -p tpt-des-core --no-default-features
       - run: cargo build -p tpt-des --no-default-features --features core
+
+  # Each umbrella feature set must build on its own. Catches a feature that
+  # forgets its dependencies (for example, `petri` needs `markov`) or a
+  # `std` edge that enables crates it should not.
+  feature-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - "core"
+          - "std"
+          - "std core"
+          - "std queue"
+          - "std resource"
+          - "std process"
+          - "std process queue"
+          - "std petri"
+          - "std markov"
+          - "std stats"
+          - "std queue stats"
+          - "std petri markov"
+          - "std verify"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check -p tpt-des --no-default-features --features "${{ matrix.features }}" --all-targets
 
   cargo-deny:
     runs-on: ubuntu-latest

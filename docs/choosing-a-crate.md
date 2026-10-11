@@ -39,8 +39,9 @@ Enable only what you use. Every feature except `core` requires `std`.
 - If you need **gradient-based optimization** of the model, this library does
   not provide it. The spec mentions differentiable hooks, but they are not
   implemented ([status](status.md)).
-- If you need a **multi-class closed network**, only single-chain closed
-  networks are implemented (see [status](status.md)).
-- If you need **multiple servers in a simulated queue**, `run_queue` models
-  one server. Use `mmc` and `erlang_c` for the closed form, or the process
-  layer (`ProcessSystem` with a two-unit resource) to simulate them.
+- If you need **multiple servers in a simulated queue**, use `run_queue_multi`
+  (FIFO, LIFO, or priority). Processor sharing is single-server only. For the
+  closed form, use `mmc` and `erlang_c`.
+- If you need a **multi-class closed network** with product-form nodes, use
+  `MultiClassClosed`. Its exact MVA cost grows with the product of the class
+  populations, so it is for small populations (see [status](status.md)).

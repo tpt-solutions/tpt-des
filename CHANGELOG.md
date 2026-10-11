@@ -9,6 +9,56 @@ and versions adhere to [Semantic Versioning](https://semver.org).
 Correctness fixes from the 2026-10-11 review (todo.md Phase 6). Each fix has
 a regression test. **Several changes are breaking** and are listed first.
 
+### Review follow-ups, Phases 7 to 10 (this batch)
+
+Added:
+- `tpt-des-queue`: multi-server simulation (`run_queue_multi`, plus
+  `run_queue_traced` for per-job records and `trace_to_csv`).
+- `tpt-des-queue`: exact multi-class closed-network MVA (`MultiClassClosed`,
+  `ClassSpec`, `MultiClassResult`). Visit ratios come from each class's routing
+  matrix.
+- `tpt-des-queue::planning`: `size_for_mean_wait` (fewest servers for a
+  mean-wait target), `validate_mmc` (simulation against M/M/c, with an
+  assertable `ValidationReport`), and `mean_wait_to_precision` (replications
+  until a confidence half-width target is met).
+- `tpt-des-queue` `serde` feature: `Serialize` on result types (not configs,
+  which hold boxed samplers).
+- CI: `feature-matrix` job builds each umbrella feature combination on its own.
+
+Changed:
+- Priority dispatch uses a binary heap (O(log n) per dispatch, was a scan of the
+  waiting line). Order is unchanged: priority, then arrival.
+- Processor sharing keeps jobs in a heap keyed on virtual finish time, so each
+  event is O(log n) (was O(n)). Completion times are unchanged.
+- Resource waiters are kept per resource in grant order. Granting is one pass,
+  and `cancel` is O(log n) through an index. Grants are unchanged.
+- The event calendar uses a slab with generation-tagged `EventId`s. Schedule and
+  cancel are O(1) (cancel was O(log n)), and stale handles are rejected. The
+  two calendar benchmarks run about 2.0 to 2.6 times faster.
+- `expm` uses 16 Taylor terms by Horner's rule (was 24 by repeated products).
+  On the `expm` bench it is about 1.3 to 1.45 times faster.
+- Student-t quantile bisection stops when its bracket is narrow (about 45
+  iterations, was 200). Results agree with the table values in the tests.
+- Replication-based M/M/1 tests: means over five replications, 10% tolerance
+  (was single runs at 25 to 30%).
+- `Dtmc::as_dmatrix` reads the chain directly, without the intermediate copy.
+
+Breaking:
+- `tpt_des::core` is now `tpt_des::kernel`. The Cargo feature is still `core`.
+- `tpt-des-queue`: `QueueError::StateSpaceTooLarge` added.
+- `tpt-des-petri`: `ReachabilityError::TokenOverflow` and `SpnError::TokenOverflow`
+  added. Overflow used to panic inside the search and now returns an error.
+- `tpt-des-queue`: `QueueMetrics` gains a public `servers` field.
+
+Fixed:
+- Processor-sharing `utilization` returned the mean number in system (it summed
+  the job count into busy time). It is now the busy fraction, so it is near ρ.
+  Regression test `processor_sharing_utilization_is_busy_fraction_not_population`
+  fails on the old code.
+- `process_bank_teller` imports `tpt_des::queue` but did not declare the feature.
+  It now does, and CI passes it.
+- The umbrella `std` feature also enables `tpt-des-process/std`.
+
 ### Added
 - **Examples** in `crates/tpt-des/examples/`: `process_bank_teller` (checked
   against Erlang C), `stats_replications` (confidence interval over
